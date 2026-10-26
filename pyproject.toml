@@ -1,0 +1,46 @@
+[project]
+name = "meydan"
+version = "0.1.0"
+description = "Primitives for running instances of personal and planning agents that coordinate people, one-to-one and in groups."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "pehlivan.ai" }]
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2",
+    "pydantic-settings>=2",
+]
+
+[project.optional-dependencies]
+# Model layer: provider-agnostic models with fallback, retries and backpressure.
+llm = [
+    "httpx>=0.28",
+    "tenacity>=9",
+    "openai>=1.80",
+    "pydantic-ai-slim[google,openrouter]>=2.61",
+]
+
+[project.urls]
+Repository = "https://github.com/pehlivan-ai/meydan"
+
+[build-system]
+requires = ["uv_build>=0.9.10,<0.10.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.17.2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "N"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"

@@ -1,0 +1,128 @@
+# Instance CI/CD (GCP: Artifact Registry + Workload Identity Federation + IAP SSH to one VM).
+# CI on every PR and push; CD on main: build once -> push -> deploy by digest -> health check.
+# Fill in the env block from the output of scripts/gcp-setup.sh.
+name: ci-cd
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  PROJECT: your-gcp-project
+  REGION: europe-west1
+  ZONE: europe-west1-b
+  VM: your-vm
+  INSTANCE_DIR: /opt/your-instance
+  HEALTH_URL: https://api.example.com/health
+  REGISTRY: europe-west1-docker.pkg.dev
+  IMAGE: europe-west1-docker.pkg.dev/your-gcp-project/your-repo/app
+  WIF_PROVIDER: projects/PROJECT_NUMBER/locations/global/workloadIdentityPools/github/providers/your-repo
+  DEPLOYER: github-deployer@your-gcp-project.iam.gserviceaccount.com
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+
+  migrations:
+    # Migrations apply cleanly from scratch and match the models.
+    runs-on: ubuntu-latest
+    services:
+      db:
+        image: postgres:18
+        env:
+          POSTGRES_USER: app
+          POSTGRES_PASSWORD: app
+          POSTGRES_DB: app
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U app" --health-interval 2s --health-retries 20
+    env:
+      DATABASE_URL: postgresql+psycopg://app:app@localhost:5432/app
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run alembic upgrade head
+      - run: uv run alembic check
+
+  stack:
+    # The whole Compose stack builds and becomes healthy.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cp .env.example .env
+      - run: docker compose up -d --build --wait --wait-timeout 180
+      - run: curl -fsSk https://localhost/health
+      - if: failure()
+        run: docker compose logs
+      - if: always()
+        run: docker compose down -v
+
+  build:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    needs: [lint, migrations, stack]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      image: ${{ env.IMAGE }}@${{ steps.push.outputs.digest }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+          token_format: access_token
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: oauth2accesstoken
+          password: ${{ steps.auth.outputs.access_token }}
+      - uses: docker/setup-buildx-action@v3
+      - id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment: production
+    # One deploy at a time; a newer push waits instead of cancelling one mid-way.
+    concurrency:
+      group: deploy-production
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ env.WIF_PROVIDER }}
+          service_account: ${{ env.DEPLOYER }}
+      - uses: google-github-actions/setup-gcloud@v2
+      - name: Deploy over IAP SSH
+        run: >
+          gcloud compute ssh ${{ env.VM }} --project ${{ env.PROJECT }} --zone ${{ env.ZONE }}
+          --tunnel-through-iap --quiet --ssh-key-expire-after=10m
+          --command "cd ${{ env.INSTANCE_DIR }} && sudo git fetch -q origin main
+          && sudo git reset -q --hard ${{ github.sha }}
+          && sudo deploy/deploy.sh ${{ github.sha }} ${{ needs.build.outputs.image }}"
+      - name: Public health check
+        run: curl -fsS --retry 5 --retry-delay 3 --retry-all-errors ${{ env.HEALTH_URL }}

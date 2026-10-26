@@ -1,0 +1,4 @@
+# Automatic HTTPS for SITE_ADDRESS (localhost uses Caddy's local CA).
+{$SITE_ADDRESS} {
+	reverse_proxy app:8000
+}

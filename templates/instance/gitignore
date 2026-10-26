@@ -1,0 +1,4 @@
+.env
+# VM-only deploy state (written by deploy/deploy.sh)
+compose.override.yaml
+.deploy/
