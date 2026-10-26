@@ -71,6 +71,21 @@ class Clock:
         local = self.to_local(dt)
         return f"{self.format_date(local)} {local:%H:%M}"
 
+    def format_window(self, start: date, end: date) -> str:
+        """A half-open day range [start, end) at the precision it has, e.g. for a tournament
+        whose exact day isn't fixed yet: a whole month -> 'Aralık 2026', one day ->
+        '13 Aralık Cumartesi', anything else -> '13 Aralık Cumartesi – 14 Aralık Pazar'."""
+        last = end - timedelta(days=1)
+        if (
+            start.day == 1
+            and end.day == 1
+            and (end.year * 12 + end.month) - (start.year * 12 + start.month) == 1
+        ):
+            return f"{self.locale.months[start.month - 1]} {start.year}"
+        if last == start:
+            return self.format_date(start)
+        return f"{self.format_date(start)} – {self.format_date(last)}"
+
     def calendar(self, days: int = 14) -> list[str]:
         """The next `days` dates from today: ['2026-10-26 26 Ekim Pazartesi', ...].
 

@@ -1,6 +1,6 @@
 [project]
 name = "meydan"
-version = "0.1.0"
+version = "0.2.0"
 description = "Primitives for running instances of personal and planning agents that coordinate people, one-to-one and in groups."
 readme = "README.md"
 license = "Apache-2.0"
@@ -13,6 +13,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Conversation runtime (Postgres 18+) and channel adapters (WhatsApp Cloud API).
+runtime = [
+    "httpx>=0.28",
+    "sqlalchemy>=2",
+    "psycopg[binary]>=3.2",
+]
 # Model layer: provider-agnostic models with fallback, retries and backpressure.
 llm = [
     "httpx>=0.28",

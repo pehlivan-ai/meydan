@@ -18,11 +18,11 @@ designed to become peers in a network later (agent-to-agent, A2A-shaped messages
 | Module | What it does | Status |
 |---|---|---|
 | `meydan.llm` | Provider-agnostic models from spec strings (`openrouter:…`, `vertex:…@location`), fallback chain, per-provider concurrency limit with bounded queue, one retry layer (Retry-After, jittered exponential backoff), timeouts | available (`meydan[llm]`) |
-| `meydan.clock` | One place that converts time: instance zone, injectable clock, localized date text and a day calendar for agent context | available |
+| `meydan.clock` | One place that converts time: instance zone, injectable clock, localized date text, date windows at their precision ("Aralık 2026"), a day calendar for agent context | available |
 | `meydan.tools` | Framework-agnostic tool contract: `(ToolContext, **params) -> model`, identity from the channel, `ToolError` for business rules | available |
 | `templates/instance` | Docker Compose stack (Postgres 18, app, Caddy), CI/CD workflow, digest-pinned deploy with health check and rollback, one-time GCP setup | available |
-| runtime | Actor per conversation, durable Postgres inbound/outbound queues, debounce, idempotency | planned |
-| channels | WhatsApp Cloud API adapter (more later) | planned |
+| `meydan.runtime` | Inbox (idempotent on message id) → one actor per conversation (advisory lock, debounce, resequencing, poison-message guard) → transactional outbox → sender (per-conversation order, bubble pacing, jittered retries, dead letter, receipt correlation). Postgres 18 | available (`meydan[runtime]`) |
+| `meydan.channels.whatsapp` | WhatsApp Cloud API: signature check, webhook parsing (text, buttons, interactive, receipts) routed by `phone_number_id`, sending text/templates from the number written to, typing indicator, retryable vs permanent errors | available (`meydan[runtime]`) |
 | planning | Plan state machine, group consensus rules, matching, waitlist/backfill, reliability, consent | planned |
 | peers | Typed agent-to-agent messages between roles and, later, between instances | planned |
 | simulation | Synthetic personas and scenarios to evaluate agents before they meet people | planned |
@@ -66,6 +66,30 @@ model = llm.get_model()  # hand this to a Pydantic AI Agent
 ```
 
 `LLMSettings` also reads `MEYDAN_LLM_*` environment variables (and `OPENROUTER_API_KEY`).
+
+## Runtime in an instance
+
+```python
+from meydan.channels.whatsapp import WhatsAppCloud, parse_messages, parse_statuses, verify_signature
+from meydan.channels.base import Outbound
+from meydan.runtime import Runtime, Turn, define_tables
+
+runtime_tables = define_tables(Base.metadata)  # your Alembic migrates meydan_inbox/outbox
+
+
+async def reply(turn: Turn) -> list[Outbound]:  # your personal agent
+    return [Outbound.text_message(f"got: {turn.text}")]
+
+
+runtime = Runtime(engine, runtime_tables, WhatsAppCloud(access_token), reply)
+
+# webhook: verify, then store in the request's transaction and answer 200 right away
+with engine.begin() as conn:
+    runtime.receive(conn, parse_messages(payload), parse_statuses(payload))
+
+# background (e.g. FastAPI lifespan): worker + sender loops
+await runtime.run(stop_event)
+```
 
 ## Setting up an instance
 

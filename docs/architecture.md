@@ -21,7 +21,7 @@ summarized at the end; claims about what's built are in the README.
 - **Instance**: one community's deployment (data, planner, agents, channel). Later a **node**
   that can exchange typed messages with other instances.
 
-## Runtime (planned)
+## Runtime (available since v0.2)
 
 ```
 channel webhook ─► inbound queue (idempotent on message id) ─► 200 OK
@@ -35,15 +35,16 @@ channel webhook ─► inbound queue (idempotent on message id) ─► 200 OK
 Every stage communicates through tables, so one stage can be replaced (or rewritten in another
 language) without touching the others. Postgres is the only infrastructure.
 
-## Channel integration: WhatsApp Cloud API ↔ meydan (planned)
+## Channel integration: WhatsApp Cloud API ↔ meydan (available since v0.2)
 
 ### The contract Meta gives us
 - Inbound messages and outbound delivery statuses both arrive as **webhooks** (HTTPS POST,
   signed with `X-Hub-Signature-256` = HMAC-SHA256 of the raw body with the app secret).
 - The endpoint must answer **200 OK within 5 seconds**; otherwise Meta retries. Delivery is
   therefore **at least once**: the same event can arrive more than once, and the receiver must
-  deduplicate. After ~15 minutes of failures Meta alerts the developer; after ~1 hour it
-  disables the subscription.
+  deduplicate. Cloud API retries undelivered webhooks (messages and receipts) for up to 7 days
+  (only 1 hour on numbers with No Storage enabled), so a receiver that is down for a while
+  still gets the backlog, all at once and unordered.
 - Events can arrive **out of order**; order by the message `timestamp`, not arrival time.
 - One Meta app has **one** webhook URL; each WhatsApp Business Account (WABA) must be
   **subscribed explicitly** to the app. Several endpoints need several apps.
