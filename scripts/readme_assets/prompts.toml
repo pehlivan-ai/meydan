@@ -1,0 +1,174 @@
+# README visuals: one entry per asset. The prompt is the source of truth; the image in
+# docs/assets/readme/ is its chosen render. Regenerate with generate.py (see its header).
+
+[style]
+# Prepended to every prompt so all assets read as one set.
+# Direction: a calm game world, a forgotten seaside settlement that exists within us;
+# Aegean coast (Datça, Fethiye, Muğla) as seen by a boutique hotel's branding agency.
+text = """
+Stylized isometric 3D game diorama, true isometric camera, soft low-poly forms with
+gently rounded edges, matte painted-clay materials, soft global illumination, tilt-shift
+miniature feel, a light haze as in a half-remembered place. Quiet and timeless, no era,
+no specific religion or nationality. Palette: sun-bleached off-white and lime-washed
+stone, warm sand, pale sage and olive green, muted bougainvillea pink used sparingly,
+calm Aegean turquoise water, one soft sea-teal accent. Editorial, airy, generous negative
+space, like a boutique seaside hotel brand. No text, no letters, no logos, no UI,
+no watermark.
+"""
+
+[assets.hero-light]
+model = "openai/gpt-image-2.5-sunburst"
+aspect_ratio = "21:9"
+quality = "max"
+background = "transparent"
+size = [1600, 686]
+prompt = """
+A small forgotten settlement on a floating island fragment, like a level in a calm puzzle
+game, isolated on a fully transparent background. A tiny cove of turquoise sea laps one
+corner of the island with a little stone jetty and a moored wooden boat. Terraced
+lime-washed houses with flat roofs and arched doorways, an old olive tree shading a small
+open square with a stone well, steps climbing between walls, a lone bougainvillea, dry
+stone walls, a few sun umbrellas. Tiny faceless figures stand in pairs and small groups;
+above some float small rounded speech bubbles linked by thin soft-teal light arcs that
+meet at a long shared table under the olive tree. The island's underside shows layered
+rock tapering away. Bright morning light; the diorama is centered with empty space on
+the left and right.
+"""
+
+[assets.hero-dark]
+model = "openai/gpt-image-2.5-sunburst"
+aspect_ratio = "21:9"
+quality = "max"
+background = "transparent"
+size = [1600, 686]
+references = ["hero-light"]
+prompt = """
+The exact same floating island as the reference image, same composition and camera, on a
+fully transparent background, at blue hour: cool moonlit stone, warm small lanterns and
+windows, the sea cove deep teal with soft reflections, the light arcs between people
+glowing a little brighter. Keep every object in place.
+"""
+
+# Module tiles: one prop per module from the island's world, transparent so they sit on
+# both themes.
+
+[assets.mod-llm]
+model = "openai/gpt-image-2.5-sunburst"
+aspect_ratio = "1:1"
+quality = "high"
+background = "transparent"
+size = [256, 256]
+references = ["hero-light"]
+prompt = """
+A single game prop from the same world as the reference image, on a fully transparent
+background, isolated and centered: a small lime-washed lighthouse on a rock with several
+lanterns of different colors on short arms, one lit and the others ready as backups.
+"""
+
+[assets.mod-clock]
+model = "openai/gpt-image-2.5-sunburst"
+aspect_ratio = "1:1"
+quality = "high"
+background = "transparent"
+size = [256, 256]
+references = ["hero-light"]
+prompt = """
+A single game prop from the same world as the reference image, on a fully transparent
+background, isolated and centered: a simple lime-washed bell arch with a round clock face,
+a stone sundial and a small olive tree in front.
+"""
+
+[assets.mod-tools]
+model = "openai/gpt-image-2.5-sunburst"
+aspect_ratio = "1:1"
+quality = "high"
+background = "transparent"
+size = [256, 256]
+references = ["hero-light"]
+prompt = """
+A single game prop from the same world as the reference image, on a fully transparent
+background, isolated and centered: a weathered wooden fisherman's work cart with neatly
+arranged tools, each in its own slot.
+"""
+
+[assets.mod-runtime]
+model = "openai/gpt-image-2.5-sunburst"
+aspect_ratio = "1:1"
+quality = "high"
+background = "transparent"
+size = [256, 256]
+references = ["hero-light"]
+prompt = """
+A single game prop from the same world as the reference image, on a fully transparent
+background, isolated and centered: a small lime-washed harbor post office cut open like a
+dollhouse, an inbox pigeonhole wall on one side, a single clerk desk in the middle, an outbox
+tray of neatly ordered envelopes on the other.
+"""
+
+[assets.mod-channels]
+model = "openai/gpt-image-2.5-sunburst"
+aspect_ratio = "1:1"
+quality = "high"
+background = "transparent"
+size = [256, 256]
+references = ["hero-light"]
+prompt = """
+A single game prop from the same world as the reference image, on a fully transparent
+background, isolated and centered: a small seaside kiosk with a blank rounded sea-teal chat
+bubble sign (no logo), paper messages flying in and out of its window.
+"""
+
+[assets.mod-instance]
+model = "openai/gpt-image-2.5-sunburst"
+aspect_ratio = "1:1"
+quality = "high"
+background = "transparent"
+size = [256, 256]
+references = ["hero-light"]
+prompt = """
+A single game prop from the same world as the reference image, on a fully transparent
+background, isolated and centered: a small stone jetty block holding three stacked pieces (a
+barrel, a crate, a little gatehouse), with a small wooden crane lowering an identical spare
+set beside it.
+"""
+
+# Planned modules: drawn as unfinished maquettes, so status reads from the picture.
+
+[assets.mod-planning]
+model = "openai/gpt-image-2.5-sunburst"
+aspect_ratio = "1:1"
+quality = "high"
+background = "transparent"
+size = [256, 256]
+references = ["hero-light"]
+prompt = """
+A single game prop from the same world as the reference image, on a fully transparent
+background, rendered as an unfinished game-level maquette: unpainted white clay with light pencil-blue wireframe edges, isolated and centered: a long shared table under a young olive tree, small
+figure tokens seated in groups of four, one empty seat.
+"""
+
+[assets.mod-peers]
+model = "openai/gpt-image-2.5-sunburst"
+aspect_ratio = "1:1"
+quality = "high"
+background = "transparent"
+size = [256, 256]
+references = ["hero-light"]
+prompt = """
+A single game prop from the same world as the reference image, on a fully transparent
+background, rendered as an unfinished game-level maquette: unpainted white clay with light pencil-blue wireframe edges, isolated and centered: two tiny floating island fragments joined by a narrow
+stone bridge with a courier crossing it.
+"""
+
+[assets.mod-simulation]
+model = "openai/gpt-image-2.5-sunburst"
+aspect_ratio = "1:1"
+quality = "high"
+background = "transparent"
+size = [256, 256]
+references = ["hero-light"]
+prompt = """
+A single game prop from the same world as the reference image, on a fully transparent
+background, rendered as an unfinished game-level maquette: unpainted white clay with light pencil-blue wireframe edges, isolated and centered: a sandbox table holding a miniature copy of a floating
+island settlement with tiny test figures, a magnifying glass resting on its edge.
+"""

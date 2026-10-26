@@ -1,6 +1,19 @@
-# meydan
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/hero-dark.webp">
+  <img alt="An isometric low-poly town square: people in small groups, their messages arcing across the square to a planning table by the fountain." src="docs/assets/readme/hero-light.webp">
+</picture>
 
-*Meydan* is Turkish for the town square: the open place where people meet, talk and make plans.
+<h1 align="center">meydan</h1>
+
+<p align="center">
+  <em>Meydan</em> is Turkish for the town square: the open place where people meet, talk and make plans.
+</p>
+
+<p align="center">
+  <img alt="version" src="https://img.shields.io/badge/version-v0.2.1-1a9e8f">
+  <img alt="python" src="https://img.shields.io/badge/python-3.12%2B-3776ab">
+  <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-d98b1f">
+</p>
 
 meydan is a Python framework and a set of instance primitives for running **personal agents**
 (one per person, acting on their behalf over a messaging channel such as WhatsApp) and
@@ -10,10 +23,59 @@ groups, agreeing on a time and place, filling a spot when someone drops out.
 Each deployment is an **instance**: one community, its own data, its own VM. Instances are
 designed to become peers in a network later (agent-to-agent, A2A-shaped messages).
 
-> Status: early (v0.1). Only the pieces marked *available* below exist today. The rest is the
+> Status: early (v0.2.1). Only the pieces marked *available* below exist today. The rest is the
 > plan, documented in [docs/architecture.md](docs/architecture.md).
 
+## What v0.2 lets you do
+
+Before v0.2, meydan could talk to a model and say dates right, but it couldn't hold a
+conversation on WhatsApp. Now you write one function, what your agent says back, and meydan
+takes care of the rest:
+
+```python
+async def reply(turn: Turn) -> list[Outbound]: ...
+```
+
+- **Nothing is handled twice.** WhatsApp may deliver the same message more than once; it is
+  processed once.
+- **People can type the way they type.** Three quick messages in a row are read together as
+  one turn, in the order they were written.
+- **Nothing gets lost.** Replies are saved together with the conversation state, so a crash
+  between "decided" and "sent" can't drop a message.
+- **Replies feel human and arrive.** They go out in order, at a natural pace, with retries;
+  what still can't be delivered is set aside for you to see, not silently dropped.
+
+**v0.2.1** makes two edges safe: if the "typing…" indicator fails, the reply still goes out;
+and errors that retrying can't fix (a wrong token, a malformed request) are marked as permanent
+right away instead of being retried.
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/flow-dark.svg">
+  <img alt="Runtime flow: Webhook, Inbox, Actor, Outbox, Sender. Three messages from one person enter the actor and one reply leaves it." src="docs/assets/readme/flow-light.svg" width="100%">
+</picture>
+
 ## What's in the box
+
+<table>
+  <tr>
+    <td align="center" width="33%"><img src="docs/assets/readme/mod-llm.webp" width="112" alt=""><br><b><code>meydan.llm</code></b><br><sub>Models from spec strings, fallback chain, backpressure, one retry layer</sub><br><sub>✅ available</sub></td>
+    <td align="center" width="33%"><img src="docs/assets/readme/mod-clock.webp" width="112" alt=""><br><b><code>meydan.clock</code></b><br><sub>One place that converts time and writes dates for people</sub><br><sub>✅ available</sub></td>
+    <td align="center" width="33%"><img src="docs/assets/readme/mod-tools.webp" width="112" alt=""><br><b><code>meydan.tools</code></b><br><sub>Framework-agnostic tool contract, identity from the channel</sub><br><sub>✅ available</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/assets/readme/mod-runtime.webp" width="112" alt=""><br><b><code>meydan.runtime</code></b><br><sub>Inbox → actor per conversation → outbox → sender, on Postgres</sub><br><sub>✅ available · new in v0.2</sub></td>
+    <td align="center"><img src="docs/assets/readme/mod-channels.webp" width="112" alt=""><br><b><code>meydan.channels.whatsapp</code></b><br><sub>WhatsApp Cloud API: webhooks in, messages out</sub><br><sub>✅ available · new in v0.2</sub></td>
+    <td align="center"><img src="docs/assets/readme/mod-instance.webp" width="112" alt=""><br><b><code>templates/instance</code></b><br><sub>Compose stack, CI/CD, digest deploy with rollback</sub><br><sub>✅ available</sub></td>
+  </tr>
+  <tr>
+    <td align="center"><img src="docs/assets/readme/mod-planning.webp" width="112" alt=""><br><b>planning</b><br><sub>Plan state machine, group consensus, matching, backfill</sub><br><sub>🧱 planned</sub></td>
+    <td align="center"><img src="docs/assets/readme/mod-peers.webp" width="112" alt=""><br><b>peers</b><br><sub>Typed agent-to-agent messages, later between instances</sub><br><sub>🧱 planned</sub></td>
+    <td align="center"><img src="docs/assets/readme/mod-simulation.webp" width="112" alt=""><br><b>simulation</b><br><sub>Synthetic personas and scenarios to test agents first</sub><br><sub>🧱 planned</sub></td>
+  </tr>
+</table>
+
+<details>
+<summary>Module details</summary>
 
 | Module | What it does | Status |
 |---|---|---|
@@ -27,12 +89,14 @@ designed to become peers in a network later (agent-to-agent, A2A-shaped messages
 | peers | Typed agent-to-agent messages between roles and, later, between instances | planned |
 | simulation | Synthetic personas and scenarios to evaluate agents before they meet people | planned |
 
+</details>
+
 ## Install
 
 meydan is consumed as a pinned git dependency:
 
 ```
-uv add "meydan[llm] @ git+https://github.com/pehlivan-ai/meydan@v0.1.0"
+uv add "meydan[llm,runtime] @ git+https://github.com/pehlivan-ai/meydan@v0.2.1"
 ```
 
 For working on meydan and an instance at the same time, clone it next to the instance and point
