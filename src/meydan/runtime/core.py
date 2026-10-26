@@ -213,7 +213,10 @@ class Runtime:
                 return 0
             turn = _turn_from_rows(key, rows)
             ids = [r["id"] for r in rows]
-            await self.channel.typing(turn.to, rows[-1]["message_id"])
+            try:  # cosmetic: never let it break a turn
+                await self.channel.typing(turn.to, rows[-1]["message_id"])
+            except Exception:
+                log.warning("typing indicator failed for %s", _mask(key), exc_info=True)
             try:
                 replies = await self.handler(turn)
             except Exception as e:

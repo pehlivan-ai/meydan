@@ -221,3 +221,16 @@ async def test_bubbles_are_paced(db):
         c.execute(update(tables.outbox).values(next_attempt_at=text("now() - interval '1 s'")))
     await rt.send_once()
     assert len(ch.sent) == 2
+
+
+async def test_typing_failure_does_not_break_the_turn(db):
+    class BrokenTyping(FakeChannel):
+        async def typing(self, from_number, message_id):
+            raise ValueError("bad header")
+
+    ch = BrokenTyping()
+    rt = runtime(db, echo, ch)
+    receive(rt, [msg("w1", "selam", T0)])
+    assert await rt.work_once() == 1
+    await rt.send_once()
+    assert [s[2] for s in ch.sent] == ["got: selam"]

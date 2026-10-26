@@ -125,3 +125,11 @@ async def test_error_classification(status, code, retryable, min_wait):
         await cloud(handler).send("222", "1", Outbound.text_message("x"))
     assert e.value.retryable is retryable
     assert e.value.min_wait_s == min_wait
+
+
+async def test_bad_config_is_permanent_and_typing_never_raises():
+    c = WhatsAppCloud("")  # empty token: httpx rejects the header before any network call
+    with pytest.raises(SendError) as e:
+        await c.send("222", "1", Outbound.text_message("x"))
+    assert e.value.retryable is False
+    await c.typing("222", "wamid.1")  # best effort: must not raise

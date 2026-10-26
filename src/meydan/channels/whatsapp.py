@@ -135,6 +135,8 @@ class WhatsAppCloud:
             )
         except (httpx.TimeoutException, httpx.NetworkError) as e:
             raise SendError(f"network: {type(e).__name__}", retryable=True) from e
+        except httpx.HTTPError as e:  # e.g. empty token -> illegal header: config, not transient
+            raise SendError(f"{type(e).__name__}: {e}", retryable=False) from e
         if r.status_code < 300:
             return r.json()
         try:
@@ -170,7 +172,7 @@ class WhatsAppCloud:
 
     async def typing(self, from_number: str, message_id: str) -> None:
         """Mark a received message read and show the typing indicator. Best effort."""
-        with contextlib.suppress(SendError):
+        with contextlib.suppress(Exception):
             await self._post(
                 from_number,
                 {
