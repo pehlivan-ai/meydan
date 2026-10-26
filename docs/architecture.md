@@ -35,6 +35,88 @@ channel webhook ─► inbound queue (idempotent on message id) ─► 200 OK
 Every stage communicates through tables, so one stage can be replaced (or rewritten in another
 language) without touching the others. Postgres is the only infrastructure.
 
+## Channel integration: WhatsApp Cloud API ↔ meydan (planned)
+
+### The contract Meta gives us
+- Inbound messages and outbound delivery statuses both arrive as **webhooks** (HTTPS POST,
+  signed with `X-Hub-Signature-256` = HMAC-SHA256 of the raw body with the app secret).
+- The endpoint must answer **200 OK within 5 seconds**; otherwise Meta retries. Delivery is
+  therefore **at least once**: the same event can arrive more than once, and the receiver must
+  deduplicate. After ~15 minutes of failures Meta alerts the developer; after ~1 hour it
+  disables the subscription.
+- Events can arrive **out of order**; order by the message `timestamp`, not arrival time.
+- One Meta app has **one** webhook URL; each WhatsApp Business Account (WABA) must be
+  **subscribed explicitly** to the app. Several endpoints need several apps.
+- Sending is a plain HTTPS call (`POST /{phone-number-id}/messages`) that returns a message id
+  (`wamid`); its fate (`sent → delivered → read`, or `failed`) comes back later as webhooks.
+- Per recipient there is a **pair rate limit**: bursts are allowed, then sends to that user are
+  throttled (Meta's example: after a burst of 20, wait ~2 minutes); retry with backoff
+  (Meta suggests 4^n seconds).
+- Business-initiated messages outside the **24-hour customer service window** must be approved
+  **templates**; free-form replies are only allowed inside the window.
+
+### Patterns
+```
+             ┌────────────── Meta (WhatsApp Cloud API) ──────────────┐
+             │  user ⇄ WhatsApp ⇄ phone number (phone_number_id)      │
+             │            webhooks (at-least-once, unordered)  ▲      │
+             └────────────────────────┬─────────────────────────┼─────┘
+                                      ▼                        │ POST /messages
+ 1 Webhook receiver ── verify signature ── route ── persist ── 200 OK (< 5 s)
+                                      │                         │
+ 2 Inbox  (Idempotent Receiver: UNIQUE wamid; raw payload kept) │
+                                      │                         │
+ 3 Conversation actor (Single Writer per conversation key, Postgres advisory lock)
+      Aggregator: debounce a burst into one turn; Resequencer: order by timestamp
+      personal agent turn ─► tools / planner (code validates every commitment)
+                                      │                         │
+ 4 Outbox (Transactional Outbox: replies written in the same transaction as state)
+                                      │                         │
+ 5 Sender ── per-number + per-recipient Rate Limiter ── Retry w/ jittered backoff ┘
+      Circuit Breaker on repeated 5xx; Dead Letter after N attempts; typing indicator
+                                      │
+ 6 Status correlation: delivery webhooks matched to outbox rows by wamid
+      (sent/delivered/read/failed) ─► reliability signals, re-send or template fallback
+```
+
+| Stage | Pattern | Why |
+|---|---|---|
+| 1 Receiver | Webhook receiver, Message Router, verify-then-ack | Meta's 5 s budget: do nothing slow before 200; reject unsigned payloads |
+| 2 Inbox | Idempotent Receiver / Transactional Inbox | at-least-once delivery → dedupe on `wamid`; keep raw payloads (they can't be fetched again) |
+| 3 Actor | Actor model, Single Writer, Aggregator, Resequencer | one turn at a time per conversation; people send bursts; events arrive unordered |
+| 4 Outbox | Transactional Outbox | never send a reply for state that didn't commit, never lose a reply for state that did |
+| 5 Sender | Rate Limiter, Retry with backoff + jitter, Circuit Breaker, Dead Letter Channel | pair rate limits, transient API errors, and no infinite retries |
+| 6 Statuses | Correlation Identifier (`wamid`) | asynchronous delivery results; feeds reliability and the 24 h window logic |
+
+### n:n relationships
+The integration is many-to-many at several levels, so meydan never assumes "one number, one
+app, one community":
+
+```
+Business portfolio 1──n WABA 1──n phone number (phone_number_id)
+Meta app           n──n WABA          (a WABA can be subscribed to several apps; one app, one URL)
+phone number       n──1 instance      (routing table: phone_number_id → instance)
+instance           1──n phone number  (e.g. a temporary and a local number side by side)
+person (wa_id)     n──n phone number  (the same person can write to several numbers)
+conversation       = (instance, phone_number_id, wa_id)  → exactly one personal agent actor
+person             1──n conversation  (one per number they use; a person can be linked across them)
+person             n──n plan          (pairs, groups, waitlists; via plan participants)
+plan               n──n conversation  (the planner fans proposals out to each participant's
+                                       conversation and fans replies back in)
+```
+
+Consequences:
+- **Routing** uses `entry[].changes[].value.metadata.phone_number_id` from each webhook, never a
+  single configured number. One receiver can serve many instances (a multi-tenant gateway) or
+  one instance per receiver; both are routing-table configurations.
+- **Reply affinity**: a reply always goes out from the `phone_number_id` the person wrote to,
+  since the 24 h window, templates and pair rate limits are all per (number, recipient).
+- **Fan-out / fan-in** for groups: the planner never talks to people directly. It writes one
+  proposal per participant into each participant's conversation (outbox), and each personal
+  agent turns replies into typed answers the planner aggregates (Scatter-Gather).
+- **Identity**: a person is keyed by `wa_id` per instance; linking the same human across
+  instances (later, between peers) is explicit and consented, never inferred.
+
 ## Group dynamics (planned)
 
 - **Consensus over chat**: the planner proposes 2-3 concrete options (time + place) as buttons;
