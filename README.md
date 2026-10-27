@@ -1,6 +1,6 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/hero-dark.webp">
-  <img alt="An isometric low-poly town square: people in small groups, their messages arcing across the square to a planning table by the fountain." src="docs/assets/readme/hero-light.webp">
+  <img alt="A small floating island settlement by the sea: people in small groups, their messages arcing to a shared table under an olive tree." src="docs/assets/readme/hero-light.webp">
 </picture>
 
 <h1 align="center">meydan</h1>
@@ -15,6 +15,53 @@
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-d98b1f">
 </p>
 
+## Imagine you live here
+
+<table>
+  <tr>
+    <td align="center" width="96"><img src="docs/assets/readme/char-you.webp" width="80" alt=""></td>
+    <td>You live on this island. A small light follows you around and acts for you.</td>
+    <td>your <b>personal agent</b></td>
+  </tr>
+  <tr>
+    <td align="center" width="96"><img src="docs/assets/readme/char-tune.webp" width="80" alt=""></td>
+    <td>You decide how much it does on its own: <i>ask me first</i>, or <i>just handle it</i>.</td>
+    <td><b>tunable</b><br><sub>planned</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="96"><img src="docs/assets/readme/char-garden.webp" width="80" alt=""></td>
+    <td>Where you've named clearly what you want and you both agreed on it, it acts without being asked, the way you would think. You keep gardening that ground together, and it ripens with practice.</td>
+    <td><b>proactive</b>, within what you agreed<br><sub>planned</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="96"><img src="docs/assets/readme/mod-channels.webp" width="80" alt=""></td>
+    <td>You talk to it by message, like to a friend.</td>
+    <td>a <b>channel</b><br><sub>WhatsApp</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="96"><img src="docs/assets/readme/mod-runtime.webp" width="80" alt=""></td>
+    <td>Every message reaches it once and in order. Every reply arrives.</td>
+    <td>the <b>runtime</b></td>
+  </tr>
+  <tr>
+    <td align="center" width="96"><img src="docs/assets/readme/mod-llm.webp" width="80" alt=""></td>
+    <td>It thinks with a model. If one goes dark, the next is already lit.</td>
+    <td><b>llm</b> with fallback</td>
+  </tr>
+  <tr>
+    <td align="center" width="96"><img src="docs/assets/readme/mod-planning.webp" width="80" alt=""></td>
+    <td>Your neighbors have lights too. When they need to agree on a time and place, one planner sets the table.</td>
+    <td>the <b>planner</b><br><sub>planned</sub></td>
+  </tr>
+  <tr>
+    <td align="center" width="96"><img src="docs/assets/readme/mod-instance.webp" width="80" alt=""></td>
+    <td>The island is one community. Later, bridges to other islands.</td>
+    <td>an <b>instance</b>, later <b>peers</b></td>
+  </tr>
+</table>
+
+## In plain terms
+
 meydan is a Python framework and a set of instance primitives for running **personal agents**
 (one per person, acting on their behalf over a messaging channel such as WhatsApp) and
 **planning agents** that coordinate people one-to-one and in groups: finding partners, forming
@@ -26,28 +73,11 @@ designed to become peers in a network later (agent-to-agent, A2A-shaped messages
 > Status: early (v0.2.1). Only the pieces marked *available* below exist today. The rest is the
 > plan, documented in [docs/architecture.md](docs/architecture.md).
 
-## What v0.2 lets you do
+**New in v0.2:** the channel and the runtime. meydan can now hold real WhatsApp
+conversations, and you only write what the agent says back, `reply(turn)`.
 
-Before v0.2, meydan could talk to a model and say dates right, but it couldn't hold a
-conversation on WhatsApp. Now you write one function, what your agent says back, and meydan
-takes care of the rest:
-
-```python
-async def reply(turn: Turn) -> list[Outbound]: ...
-```
-
-- **Nothing is handled twice.** WhatsApp may deliver the same message more than once; it is
-  processed once.
-- **People can type the way they type.** Three quick messages in a row are read together as
-  one turn, in the order they were written.
-- **Nothing gets lost.** Replies are saved together with the conversation state, so a crash
-  between "decided" and "sent" can't drop a message.
-- **Replies feel human and arrive.** They go out in order, at a natural pace, with retries;
-  what still can't be delivered is set aside for you to see, not silently dropped.
-
-**v0.2.1** makes two edges safe: if the "typing…" indicator fails, the reply still goes out;
-and errors that retrying can't fix (a wrong token, a malformed request) are marked as permanent
-right away instead of being retried.
+**v0.2.1:** if the "typing…" indicator fails, the reply still goes out; errors that retrying
+can't fix (a wrong token, a malformed request) are marked permanent right away.
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/flow-dark.svg">

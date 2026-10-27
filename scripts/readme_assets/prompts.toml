@@ -172,3 +172,53 @@ A single game prop from the same world as the reference image, on a fully transp
 background, rendered as an unfinished game-level maquette: unpainted white clay with light pencil-blue wireframe edges, isolated and centered: a sandbox table holding a miniature copy of a floating
 island settlement with tiny test figures, a magnifying glass resting on its edge.
 """
+
+# Characters: the reader and their personal agent.
+
+[assets.char-you]
+model = "openai/gpt-image-2.5-sunburst"
+aspect_ratio = "1:1"
+quality = "high"
+background = "transparent"
+size = [256, 256]
+references = ["hero-light"]
+prompt = """
+A single game character from the same world as the reference image, on a fully
+transparent background, isolated and centered: a small faceless figure in light linen
+clothes standing on a round lime-washed stone tile with a little olive sapling, and
+floating beside their shoulder a small soft sea-teal glowing orb companion, like a
+friendly guide spirit. Calm, welcoming, slightly larger than the figures in the reference.
+"""
+
+[assets.char-tune]
+model = "openai/gpt-image-2.5-sunburst"
+aspect_ratio = "1:1"
+quality = "high"
+background = "transparent"
+size = [256, 256]
+references = ["char-you"]
+prompt = """
+The same small sea-teal glowing orb companion as in the reference, on a fully transparent
+background, isolated and centered, hovering above a small lime-washed stone pedestal with
+a single brass dial knob set to the middle, a few soft light ticks around the dial.
+No text, no numbers.
+"""
+
+[assets.char-garden]
+model = "openai/gpt-image-2.5-sunburst"
+aspect_ratio = "1:1"
+quality = "high"
+background = "transparent"
+size = [256, 256]
+references = ["char-you"]
+prompt = """
+A small terraced garden from the same world as the reference, on a fully transparent
+background, isolated and centered. Some square plots are edged with lime-washed stone
+and marked with a small wooden stake with a blank sea-teal ribbon; these plots are
+lush and tended. Other plots are plain earth, unmarked and untouched. The same small
+sea-teal glowing orb companion hovers over one marked plot, gently watering it with a
+thin stream of light. The same small faceless figure from the reference kneels at the
+edge of a plot, pressing in a fresh stake with a ribbon: the two of them garden it
+together, a practice repeated season after season.
+No text.
+"""

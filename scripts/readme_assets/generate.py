@@ -89,6 +89,14 @@ def promote(name: str, source: Path) -> None:
     width, height = assets[name]["size"]
     image = Image.open(source)
     image = image.convert("RGBA" if image.mode in ("RGBA", "LA", "P") else "RGB")
+    if image.mode == "RGBA" and width == height:
+        # Square props: trim the transparent margin and re-center, so every tile fills the
+        # same share of its cell however small the model drew it.
+        image = image.crop(image.getchannel("A").point(lambda a: 255 if a > 8 else 0).getbbox())
+        side = round(max(image.size) * 1.08)
+        canvas = Image.new("RGBA", (side, side))
+        canvas.paste(image, ((side - image.width) // 2, (side - image.height) // 2))
+        image = canvas
     image.thumbnail((width, height), Image.Resampling.LANCZOS)
     OUT.mkdir(parents=True, exist_ok=True)
     target = OUT / f"{name}.webp"

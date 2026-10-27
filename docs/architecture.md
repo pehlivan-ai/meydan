@@ -18,6 +18,10 @@ summarized at the end; claims about what's built are in the README.
   `proposed → collecting → confirmed → at_risk → dropped → backfilled → done | no_show`.
 - **Autonomy policy**: per person and per action, what the agent may do alone and what needs a
   "yes" first (e.g. "auto-accept Saturday mornings at my club", "always ask before paying").
+- **Agreed ground**: the agent is proactive only on topics the person has named clearly and
+  agreed on with it; there it follows the person's way of thinking without being asked.
+  Outside that ground it asks. The ground is gardened, not just widened: the person and the
+  agent revisit and refine it over time, as a practice.
 - **Instance**: one community's deployment (data, planner, agents, channel). Later a **node**
   that can exchange typed messages with other instances.
 
