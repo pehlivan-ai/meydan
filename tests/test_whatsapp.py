@@ -5,7 +5,7 @@ import json
 import httpx
 import pytest
 
-from meydan.channels.base import Outbound, SendError
+from meydan.channels.base import Address, Outbound, SendError
 from meydan.channels.whatsapp import (
     WhatsAppCloud,
     parse_messages,
@@ -61,10 +61,34 @@ def test_parses_text_button_and_interactive_routed_by_number():
         )
     )  # fmt: skip
     assert [m.text for m in msgs] == ["selam", "Onaylıyorum", "A"]
-    assert {m.to for m in msgs} == {"222"}
-    assert msgs[0].sender_name == "Ayşe"
-    assert msgs[0].conversation_key == "whatsapp:222:905550000001"
+    assert {m.to for m in msgs} == {Address("wa-pnid", "222")}
+    assert msgs[0].sender == Address("tel", "+905550000001")
+    assert msgs[0].sender_name == "Ayşe" and msgs[0].also == ()
     assert msgs[0].sent_at.tzinfo is not None
+
+
+def test_username_users_route_by_bsuid_and_messages_without_sender_are_skipped():
+    payload = webhook(
+        [
+            {"id": "w1", "from": "905550000001", "from_user_id": "TR.111",
+             "timestamp": "1793000000", "type": "text", "text": {"body": "numaralı"}},
+            {"id": "w2", "from_user_id": "TR.222", "timestamp": "1793000001", "type": "text",
+             "text": {"body": "sadece kullanıcı adı"}},
+            {"id": "w3", "timestamp": "1793000002", "type": "text", "text": {"body": "kimsesiz"}},
+        ],
+        phone_number_id="222",
+    )  # fmt: skip
+    payload["entry"][0]["changes"][0]["value"]["contacts"].append(
+        {"user_id": "TR.222", "profile": {"name": "Deniz", "username": "deniz"}}
+    )
+    msgs = parse_messages(payload, portfolio="p1")
+    # Phone first, else the BSUID; together they are one sender (channel co-occurrence).
+    assert [m.sender for m in msgs] == [
+        Address("tel", "+905550000001"),
+        Address("wa-bsuid", "TR.222", "p1"),
+    ]
+    assert msgs[0].also == (Address("wa-bsuid", "TR.111", "p1"),)
+    assert msgs[1].sender_name == "Deniz" and msgs[1].attrs == {"username": "deniz"}
 
 
 def test_parses_statuses_with_errors():
@@ -97,6 +121,7 @@ async def test_send_text_and_template_bodies():
         "222", "905550000001", Outbound.template_message("tournament_reminder", "tr", club="Moda")
     )
     assert seen[0][0].endswith("/222/messages")  # sent from the number they wrote to
+    assert seen[0][1]["to"] == "905550000001" and "recipient" not in seen[0][1]
     assert seen[0][1]["text"] == {"body": "hi"}
     t = seen[1][1]["template"]
     assert t["name"] == "tournament_reminder" and t["language"] == {"code": "tr"}
@@ -105,6 +130,17 @@ async def test_send_text_and_template_bodies():
         "parameter_name": "club",
         "text": "Moda",
     }
+
+
+async def test_send_to_bsuid_uses_recipient():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"messages": [{"id": "wamid.Y"}]})
+
+    await cloud(handler).send("222", "US.13491208655302741918", Outbound.text_message("hi"))
+    assert seen[0]["recipient"] == "US.13491208655302741918" and "to" not in seen[0]
 
 
 @pytest.mark.parametrize(

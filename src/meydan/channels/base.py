@@ -6,23 +6,43 @@ from typing import Any, Literal
 
 
 @dataclass(frozen=True)
+class Address:
+    """An identity on a channel: immutable, never reassigned. Names and usernames are not addresses.
+
+    scheme: tel | wa-bsuid | wa-pnid | mailto | agent | ... (declared by the connector)
+    value:  normalized (E.164 with "+", lowercased email, the channel's opaque id)
+    scope:  namespace where the channel scopes ids (e.g. a business portfolio); "" if global
+    """
+
+    scheme: str
+    value: str
+    scope: str = ""
+
+    def __str__(self) -> str:
+        return (
+            f"{self.scheme}:{self.scope}:{self.value}"
+            if self.scope
+            else f"{self.scheme}:{self.value}"
+        )
+
+
+@dataclass(frozen=True)
 class Inbound:
-    """One message a person sent to one of our numbers."""
+    """One message someone sent to one of our endpoints."""
 
     channel: str  # e.g. "whatsapp"
     message_id: str  # channel's id (WhatsApp: wamid); unique per channel
-    to: str  # our number/account id the person wrote to (WhatsApp: phone_number_id)
-    sender: str  # the person's channel id (WhatsApp: wa_id, digits only)
-    sent_at: datetime  # when the person sent it (channel timestamp, aware)
+    to: Address  # our endpoint (WhatsApp: wa-pnid, the phone_number_id written to)
+    sender: Address  # the address to answer (WhatsApp: tel when shared, else wa-bsuid)
+    sent_at: datetime  # when they sent it (channel timestamp, aware)
     kind: str  # text | button | interactive | image | ... (channel's type)
     text: str  # best-effort text: body, button title, caption; "" if none
     payload: dict[str, Any] = field(default_factory=dict)  # the raw message object
     sender_name: str | None = None  # profile name, if the channel shares it
-
-    @property
-    def conversation_key(self) -> str:
-        """One conversation = (channel, our number, person). See docs/architecture.md, n:n."""
-        return f"{self.channel}:{self.to}:{self.sender}"
+    # Other addresses the channel asserts belong to the same sender in this very message
+    # (WhatsApp: the BSUID next to the phone number). Evidence for `channel_cooccurrence`.
+    also: tuple[Address, ...] = ()
+    attrs: dict[str, Any] = field(default_factory=dict)  # e.g. username; stored on the identity
 
 
 @dataclass(frozen=True)

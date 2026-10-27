@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 
-from meydan.channels.base import Inbound, Outbound, SendError, StatusUpdate
+from meydan.channels.base import Address, Inbound, Outbound, SendError, StatusUpdate
 
 CHANNEL = "whatsapp"
 GRAPH = "https://graph.facebook.com"
@@ -68,26 +68,60 @@ def _values(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
                 yield change.get("value", {})
 
 
-def parse_messages(payload: dict[str, Any]) -> list[Inbound]:
-    """Every incoming message in a webhook payload, routed by our phone_number_id."""
+# Address schemes this connector owns.
+TEL = "tel"  # the person's phone number, E.164 with "+" (WhatsApp's wa_id / `from`, digits)
+BSUID = "wa-bsuid"  # business-scoped user id, scoped to one Meta business portfolio
+ENDPOINT = "wa-pnid"  # our side: the phone_number_id a message was written to
+
+
+def is_bsuid(recipient: str) -> bool:
+    """Business-scoped user id (e.g. "US.13491208655302741918") rather than a phone number."""
+    return not recipient.lstrip("+").isdigit()
+
+
+def tel(wa_id: str) -> Address:
+    return Address(TEL, "+" + wa_id.lstrip("+"))
+
+
+def parse_messages(payload: dict[str, Any], portfolio: str = "") -> list[Inbound]:
+    """Every incoming message in a webhook payload, routed by our phone_number_id.
+
+    The sender is the phone number (`from`) when WhatsApp shares it, else the business-scoped user
+    id (`from_user_id`, BSUID): people with a WhatsApp username may write without sharing their
+    number. When both are present in one message, the BSUID goes in `also`: WhatsApp itself
+    asserts that they are the same person (`channel_cooccurrence`).
+
+    `portfolio` scopes BSUIDs (they are unique per Meta business portfolio); "" for an instance
+    with a single portfolio.
+    """
     out = []
     for value in _values(payload):
-        to = value.get("metadata", {}).get("phone_number_id", "")
-        names = {
-            c.get("wa_id"): c.get("profile", {}).get("name") for c in value.get("contacts", [])
-        }
+        to = Address(ENDPOINT, value.get("metadata", {}).get("phone_number_id", ""))
+        profiles: dict[str, dict[str, Any]] = {}
+        for c in value.get("contacts", []):
+            for key in (c.get("wa_id"), c.get("user_id")):
+                if key:
+                    profiles[key] = c.get("profile", {})
         for m in value.get("messages", []):
+            phone, bsuid = m.get("from"), m.get("from_user_id")
+            if not (phone or bsuid):
+                continue  # nobody to answer; the raw payload is the app's to keep
+            user = Address(BSUID, bsuid, portfolio) if bsuid else None
+            sender = tel(phone) if phone else Address(BSUID, str(bsuid), portfolio)
+            profile = profiles.get(phone or "") or profiles.get(bsuid or "") or {}
             out.append(
                 Inbound(
                     channel=CHANNEL,
                     message_id=m["id"],
                     to=to,
-                    sender=m["from"],
+                    sender=sender,
                     sent_at=_ts(m["timestamp"]),
                     kind=m.get("type", "unknown"),
                     text=_text_of(m),
                     payload=m,
-                    sender_name=names.get(m["from"]),
+                    sender_name=profile.get("name"),
+                    also=(user,) if phone and user else (),
+                    attrs={"username": profile["username"]} if profile.get("username") else {},
                 )
             )
     return out
@@ -152,8 +186,11 @@ class WhatsAppCloud:
         raise SendError(reason, retryable=False, code=code)
 
     async def send(self, from_number: str, to: str, message: Outbound) -> str:
-        """Send one message; returns the channel message id (wamid)."""
-        body: dict[str, Any] = {"messaging_product": "whatsapp", "to": to}
+        """Send one message; returns the channel message id (wamid).
+
+        `to` is a phone number (E.164 or wa_id digits) or a BSUID; a BSUID goes in `recipient`."""
+        body: dict[str, Any] = {"messaging_product": "whatsapp"}
+        body |= {"recipient": to} if is_bsuid(to) else {"to": to.lstrip("+")}
         if message.kind == "text":
             body |= {"type": "text", "text": {"body": message.text}}
         else:

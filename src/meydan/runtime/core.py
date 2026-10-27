@@ -1,8 +1,12 @@
-"""The conversation runtime: inbox → actor per conversation → outbox → sender.
+"""The conversation runtime: inbox → worker (one turn per conversation at a time) → outbox → sender.
 
 Patterns (docs/architecture.md): Idempotent Receiver, Single Writer per conversation (Postgres
 advisory lock), Aggregator (debounce bursts into one turn), Resequencer (order by the sender's
 timestamp), Transactional Outbox, Rate-limited sender with jittered retries and a dead letter.
+Each message is routed to a conversation through its sender's identity (meydan.runtime.identity).
+
+All "not before" times are computed on the database clock (`now()`), the same clock the queues
+are read with: an app server whose clock drifts can't stall or rush the sender.
 
 Delivery is at least once end to end: if the process dies after the channel accepted a message
 but before we recorded it, that message is sent again. Channels offer no idempotency key.
@@ -12,15 +16,17 @@ import asyncio
 import contextlib
 import logging
 import random
+import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from typing import Any, Protocol
 
 from sqlalchemy import Connection, Engine, case, func, insert, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from meydan.channels.base import Inbound, Outbound, SendError, StatusUpdate
+from meydan.channels.base import Address, Inbound, Outbound, SendError, StatusUpdate
+from meydan.runtime import identity
 from meydan.runtime.tables import RuntimeTables
 
 log = logging.getLogger("meydan.runtime")
@@ -33,18 +39,31 @@ class Channel(Protocol):
 
 @dataclass(frozen=True)
 class Turn:
-    """Everything a person sent since the last turn, in the order they sent it."""
+    """Everything someone sent since the last turn, in the order they sent it."""
 
-    conversation_key: str
+    conversation_id: uuid.UUID
     channel: str
-    to: str  # our number
-    sender: str
+    to: str  # our endpoint (WhatsApp: phone_number_id)
+    sender: Address  # where the reply goes (the address of the latest message)
+    sender_identity_id: uuid.UUID
+    actor_id: uuid.UUID  # who it is, as settled now (memory and domain data hang off this)
     sender_name: str | None
     messages: Sequence[Inbound]
 
     @property
     def text(self) -> str:
         return "\n".join(m.text for m in self.messages if m.text)
+
+
+@dataclass(frozen=True)
+class Said:
+    """One line of a conversation's transcript: something received or sent."""
+
+    at: datetime  # database clock: when we received it / queued it (one clock for both sides)
+    direction: str  # "in" | "out"
+    identity_id: uuid.UUID | None  # who said it (in) / to whom (out)
+    text: str
+    turn_id: uuid.UUID | None = None  # outbound: messages of one reply share it
 
 
 Handler = Callable[[Turn], Awaitable[Sequence[Outbound]]]
@@ -93,13 +112,29 @@ class Runtime:
         Returns how many messages were new. Cheap: safe to call before answering 200.
         """
         new = 0
+        i = self.t.inbox
         for m in messages:
+            seen = select(i.c.id).where(i.c.channel == m.channel, i.c.message_id == m.message_id)
+            if conn.scalar(seen) is not None:
+                continue  # duplicate delivery: identities and routing were settled the first time
+            routed = identity.route(
+                conn,
+                self.t,
+                channel=m.channel,
+                to=m.to,
+                sender=m.sender,
+                also=m.also,
+                name=m.sender_name,
+                attrs=m.attrs,
+                evidence={"message_id": m.message_id},
+            )
             row = {
                 "channel": m.channel,
                 "message_id": m.message_id,
-                "conversation_key": m.conversation_key,
-                "to": m.to,
-                "sender": m.sender,
+                "conversation_id": routed.conversation_id,
+                "sender_identity_id": routed.sender_identity_id,
+                "to": m.to.value,
+                "sender": m.sender.value,
                 "sender_name": m.sender_name,
                 "kind": m.kind,
                 "text": m.text,
@@ -138,41 +173,59 @@ class Runtime:
         conn: Connection,
         *,
         channel: str,
-        conversation_key: str,
+        conversation_id: uuid.UUID,
         from_number: str,
         to: str,
         messages: Sequence[Outbound],
+        recipient_identity_id: uuid.UUID | None = None,
         start_at: datetime | None = None,
-    ) -> None:
-        """Queue messages for one conversation, paced like someone typing them one by one."""
-        at = start_at or datetime.now(UTC)
+    ) -> uuid.UUID | None:
+        """Queue one outbound turn (one or more messages), paced like someone typing them.
+
+        Returns the turn id. Without `start_at` the turn starts now on the database clock."""
+        if not messages:
+            return None
+        turn_id = uuid.uuid4()
+        offset = timedelta()
         rows = []
-        for i, m in enumerate(messages):
-            if i:
+        for seq, m in enumerate(messages):
+            if seq:
                 gap = len(m.text or "") / self.cfg.chars_per_second
-                at += timedelta(seconds=min(gap, self.cfg.max_bubble_gap_s))
+                offset += timedelta(seconds=min(gap, self.cfg.max_bubble_gap_s))
             rows.append(
                 {
                     "channel": channel,
-                    "conversation_key": conversation_key,
+                    "conversation_id": conversation_id,
+                    "recipient_identity_id": recipient_identity_id,
                     "from_number": from_number,
                     "to": to,
+                    "turn_id": turn_id,
+                    "seq": seq,
                     "message": m.to_payload(),
-                    "next_attempt_at": at,
+                    "next_attempt_at": (start_at + offset) if start_at else func.now() + offset,
                 }
             )
-        if rows:
-            conn.execute(insert(self.t.outbox), rows)
+        for row in rows:  # one statement per row: `next_attempt_at` may be a SQL expression
+            conn.execute(insert(self.t.outbox).values(row))
+        return turn_id
+
+    # --- reading -------------------------------------------------------------------------
+
+    def transcript(
+        self, conn: Connection, conversation_id: uuid.UUID, limit: int = 30
+    ) -> list[Said]:
+        """See `transcript`."""
+        return transcript(conn, self.t, conversation_id, limit)
 
     # --- worker: one turn per conversation at a time ---------------------------------------
 
-    def _due_conversations(self) -> list[str]:
+    def _due_conversations(self) -> list[uuid.UUID]:
         i = self.t.inbox
         now = func.now()
         q = (
-            select(i.c.conversation_key)
+            select(i.c.conversation_id)
             .where(i.c.processed_at.is_(None))
-            .group_by(i.c.conversation_key)
+            .group_by(i.c.conversation_id)
             .having(
                 (func.max(i.c.received_at) <= now - timedelta(seconds=self.cfg.debounce_s))
                 | (func.min(i.c.received_at) <= now - timedelta(seconds=self.cfg.max_wait_s))
@@ -191,19 +244,36 @@ class Runtime:
             done += await self._turn(key)
         return done
 
-    def _claim(self, conn: Connection, key: str) -> list[dict[str, Any]] | None:
-        got = conn.scalar(select(func.pg_try_advisory_xact_lock(func.hashtextextended(key, 0))))
-        if not got:
+    def _claim(self, conn: Connection, key: uuid.UUID) -> list[dict[str, Any]] | None:
+        lock = func.pg_try_advisory_xact_lock(func.hashtextextended(f"conversation:{key}", 0))
+        if not conn.scalar(select(lock)):
             return None  # another worker is in a turn for this conversation
-        i = self.t.inbox
+        i, ident, cv, cl = self.t.inbox, self.t.identities, self.t.conversations, self.t.claims
+        ep = ident.alias("endpoint")
         rows = conn.execute(
-            select(i)
-            .where(i.c.conversation_key == key, i.c.processed_at.is_(None))
-            .order_by(i.c.sent_at, i.c.id)  # Resequencer: the person's order, not arrival
+            select(
+                i,
+                ident.c.scheme.label("sender_scheme"),
+                ident.c.scope.label("sender_scope"),
+                ep.c.scheme.label("to_scheme"),
+                ep.c.scope.label("to_scope"),
+                cl.c.actor_id,
+            )
+            .join(ident, ident.c.id == i.c.sender_identity_id)
+            .join(cv, cv.c.id == i.c.conversation_id)
+            .join(ep, ep.c.id == cv.c.endpoint_identity_id)
+            .outerjoin(
+                cl,
+                (cl.c.identity_id == i.c.sender_identity_id)
+                & (cl.c.state == "active")
+                & cl.c.valid_to.is_(None),
+            )
+            .where(i.c.conversation_id == key, i.c.processed_at.is_(None))
+            .order_by(i.c.sent_at, i.c.id)  # Resequencer: the sender's order, not arrival
         ).mappings()
         return [dict(r) for r in rows]
 
-    async def _turn(self, key: str) -> int:
+    async def _turn(self, key: uuid.UUID) -> int:
         conn = await asyncio.to_thread(self.engine.connect)
         try:
             trans = conn.begin()
@@ -216,12 +286,12 @@ class Runtime:
             try:  # cosmetic: never let it break a turn
                 await self.channel.typing(turn.to, rows[-1]["message_id"])
             except Exception:
-                log.warning("typing indicator failed for %s", _mask(key), exc_info=True)
+                log.warning("typing indicator failed for %s", key, exc_info=True)
             try:
                 replies = await self.handler(turn)
             except Exception as e:
                 trans.rollback()
-                log.exception("turn failed for %s", _mask(key))
+                log.exception("turn failed for %s", key)
                 await asyncio.to_thread(self._record_failure, turn, ids, e)
                 return 0
 
@@ -229,9 +299,10 @@ class Runtime:
                 self.enqueue(
                     conn,
                     channel=turn.channel,
-                    conversation_key=key,
+                    conversation_id=key,
                     from_number=turn.to,
-                    to=turn.sender,
+                    to=turn.sender.value,
+                    recipient_identity_id=turn.sender_identity_id,
                     messages=replies,
                 )
                 self._mark_processed(conn, ids)
@@ -261,9 +332,10 @@ class Runtime:
                     self.enqueue(
                         conn,
                         channel=turn.channel,
-                        conversation_key=turn.conversation_key,
+                        conversation_id=turn.conversation_id,
                         from_number=turn.to,
-                        to=turn.sender,
+                        to=turn.sender.value,
+                        recipient_identity_id=turn.sender_identity_id,
                         messages=self.on_failure(turn, exc),
                     )
 
@@ -277,8 +349,8 @@ class Runtime:
                 text(
                     f"""
                 SELECT o.* FROM {self.t.outbox.name} o
-                JOIN (SELECT DISTINCT ON (conversation_key) id FROM {self.t.outbox.name}
-                      WHERE status = 'pending' ORDER BY conversation_key, id) head
+                JOIN (SELECT DISTINCT ON (conversation_id) id FROM {self.t.outbox.name}
+                      WHERE status = 'pending' ORDER BY conversation_id, id) head
                   ON head.id = o.id
                 WHERE o.next_attempt_at <= now()
                 ORDER BY o.next_attempt_at
@@ -329,7 +401,7 @@ class Runtime:
             wait = self._backoff(attempts, e.min_wait_s)
             return base | {
                 "last_error": e.reason,
-                "next_attempt_at": datetime.now(UTC) + timedelta(seconds=wait),
+                "next_attempt_at": func.now() + timedelta(seconds=wait),
             }
         return base | {
             "status": "sent",
@@ -364,14 +436,42 @@ class Runtime:
         await asyncio.gather(loop(self.work_once, "worker"), loop(self.send_once, "sender"))
 
 
-def _turn_from_rows(key: str, rows: list[dict[str, Any]]) -> Turn:
-    first = rows[0]
+def transcript(
+    conn: Connection, t: RuntimeTables, conversation_id: uuid.UUID, limit: int = 30
+) -> list[Said]:
+    """The last `limit` things said in a conversation, oldest first.
+
+    Inbound: messages already consumed by a turn. Outbound: everything queued except dead
+    letters. Both sides are ordered on the database clock: a sender's device clock (the
+    channel timestamp) must not interleave with ours."""
+    i, o = t.inbox, t.outbox
+    ins = conn.execute(
+        select(i.c.received_at, i.c.id, i.c.sender_identity_id, i.c.text)
+        .where(i.c.conversation_id == conversation_id, i.c.processed_at.is_not(None))
+        .order_by(i.c.received_at.desc(), i.c.id.desc())
+        .limit(limit)
+    ).all()
+    outs = conn.execute(
+        select(o.c.created_at, o.c.id, o.c.recipient_identity_id, o.c.message, o.c.turn_id)
+        .where(o.c.conversation_id == conversation_id, o.c.status != "dead")
+        .order_by(o.c.created_at.desc(), o.c.id.desc())
+        .limit(limit)
+    ).all()
+    lines = [(at, id_, Said(at, "in", who, text or "")) for at, id_, who, text in ins]
+    lines += [
+        (at, id_, Said(at, "out", who, (msg or {}).get("text") or "", turn))
+        for at, id_, who, msg, turn in outs
+    ]
+    return [said for _, _, said in sorted(lines, key=lambda x: (x[0], x[1]))[-limit:]]
+
+
+def _turn_from_rows(key: uuid.UUID, rows: list[dict[str, Any]]) -> Turn:
     msgs = [
         Inbound(
             channel=r["channel"],
             message_id=r["message_id"],
-            to=r["to"],
-            sender=r["sender"],
+            to=Address(r["to_scheme"], r["to"], r["to_scope"]),
+            sender=Address(r["sender_scheme"], r["sender"], r["sender_scope"]),
             sent_at=r["sent_at"],
             kind=r["kind"],
             text=r["text"],
@@ -380,10 +480,15 @@ def _turn_from_rows(key: str, rows: list[dict[str, Any]]) -> Turn:
         )
         for r in rows
     ]
+    last = rows[-1]  # answer the address that wrote last (it may have changed mid-burst)
     name = next((r["sender_name"] for r in reversed(rows) if r["sender_name"]), None)
-    return Turn(key, first["channel"], first["to"], first["sender"], name, msgs)
-
-
-def _mask(key: str) -> str:
-    """Conversation keys contain phone numbers: logs show only the last 4 digits."""
-    return f"{key.rsplit(':', 1)[0]}:***{key[-4:]}"
+    return Turn(
+        conversation_id=key,
+        channel=last["channel"],
+        to=last["to"],
+        sender=msgs[-1].sender,
+        sender_identity_id=last["sender_identity_id"],
+        actor_id=last["actor_id"],
+        sender_name=name,
+        messages=msgs,
+    )

@@ -1,72 +1,13 @@
-"""Runtime tests against a real Postgres 18 (advisory locks, SKIP LOCKED, uuidv7).
-
-Set MEYDAN_TEST_DATABASE_URL, or have a local Postgres with a `meydan_test` database.
-"""
+"""Runtime tests against a real Postgres 18 (advisory locks, SKIP LOCKED, uuidv7); see conftest."""
 
 import asyncio
-import os
-from datetime import UTC, datetime, timedelta
+from datetime import timedelta
 
-import pytest
-from sqlalchemy import MetaData, create_engine, select, text, update
+from conftest import T0, FakeChannel, msg, receive, runtime
+from sqlalchemy import select, text, update
 
-from meydan.channels.base import Inbound, Outbound, SendError, StatusUpdate
-from meydan.runtime import Runtime, RuntimeConfig, Turn, define_tables
-
-URL = os.environ.get(
-    "MEYDAN_TEST_DATABASE_URL", "postgresql+psycopg://meydan:meydan@localhost:5432/meydan_test"
-)
-T0 = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
-
-
-@pytest.fixture
-def db():
-    engine = create_engine(URL)
-    try:
-        with engine.connect() as c:
-            c.execute(text("select uuidv7()"))
-    except Exception as e:
-        pytest.skip(f"no Postgres 18 test database: {e}")
-    md = MetaData()
-    tables = define_tables(md)
-    md.drop_all(engine)
-    md.create_all(engine)
-    yield engine, tables
-    md.drop_all(engine)
-    engine.dispose()
-
-
-class FakeChannel:
-    def __init__(self, fail: list[SendError] | None = None):
-        self.sent: list[tuple[str, str, str]] = []
-        self.typing_for: list[str] = []
-        self.fail = list(fail or [])
-
-    async def send(self, from_number, to, message):
-        if self.fail:
-            raise self.fail.pop(0)
-        self.sent.append((from_number, to, message.text))
-        return f"wamid.{len(self.sent)}"
-
-    async def typing(self, from_number, message_id):
-        self.typing_for.append(message_id)
-
-
-def msg(mid: str, body: str, at: datetime, sender: str = "905550000001", to: str = "222"):
-    return Inbound("whatsapp", mid, to, sender, at, "text", body, {"id": mid})
-
-
-def runtime(db, handler, channel=None, **cfg) -> Runtime:
-    engine, tables = db
-    defaults = dict(debounce_s=0, max_wait_s=0, chars_per_second=1e9)
-    return Runtime(
-        engine, tables, channel or FakeChannel(), handler, RuntimeConfig(**(defaults | cfg))
-    )
-
-
-def receive(rt: Runtime, messages=(), statuses=()):
-    with rt.engine.begin() as c:
-        return rt.receive(c, messages, statuses)
+from meydan.channels.base import Outbound, SendError, StatusUpdate
+from meydan.runtime import Runtime, RuntimeConfig, Turn
 
 
 async def echo(turn: Turn):

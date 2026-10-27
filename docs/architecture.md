@@ -26,11 +26,13 @@ summarized at the end; claims about what's built are in the README.
   that can exchange typed messages with other instances.
 
 ## Runtime (available since v0.2)
+Who is who (actors, identities, claims) and how messages find their conversation:
+[docs/identity.md](identity.md) (since v0.3).
 
 ```
 channel webhook ─► inbound queue (idempotent on message id) ─► 200 OK
                          │
-        actor per conversation (one at a time per person, Postgres advisory lock)
+        worker: one turn per conversation at a time (Postgres advisory lock)
            debounce bursts ─► personal agent turn ─► tools / planner intents
                          │
         outbound queue ─► sender (typing indicator, bubbles, channel API, status receipts)
@@ -71,7 +73,7 @@ language) without touching the others. Postgres is the only infrastructure.
                                       │                         │
  2 Inbox  (Idempotent Receiver: UNIQUE wamid; raw payload kept) │
                                       │                         │
- 3 Conversation actor (Single Writer per conversation key, Postgres advisory lock)
+ 3 Worker (Single Writer per conversation id, Postgres advisory lock)
       Aggregator: debounce a burst into one turn; Resequencer: order by timestamp
       personal agent turn ─► tools / planner (code validates every commitment)
                                       │                         │
@@ -88,7 +90,7 @@ language) without touching the others. Postgres is the only infrastructure.
 |---|---|---|
 | 1 Receiver | Webhook receiver, Message Router, verify-then-ack | Meta's 5 s budget: do nothing slow before 200; reject unsigned payloads |
 | 2 Inbox | Idempotent Receiver / Transactional Inbox | at-least-once delivery → dedupe on `wamid`; keep raw payloads (they can't be fetched again) |
-| 3 Actor | Actor model, Single Writer, Aggregator, Resequencer | one turn at a time per conversation; people send bursts; events arrive unordered |
+| 3 Worker | Single Writer, Aggregator, Resequencer | one turn at a time per conversation; people send bursts; events arrive unordered |
 | 4 Outbox | Transactional Outbox | never send a reply for state that didn't commit, never lose a reply for state that did |
 | 5 Sender | Rate Limiter, Retry with backoff + jitter, Circuit Breaker, Dead Letter Channel | pair rate limits, transient API errors, and no infinite retries |
 | 6 Statuses | Correlation Identifier (`wamid`) | asynchronous delivery results; feeds reliability and the 24 h window logic |
@@ -102,9 +104,10 @@ Business portfolio 1──n WABA 1──n phone number (phone_number_id)
 Meta app           n──n WABA          (a WABA can be subscribed to several apps; one app, one URL)
 phone number       n──1 instance      (routing table: phone_number_id → instance)
 instance           1──n phone number  (e.g. a temporary and a local number side by side)
-person (wa_id)     n──n phone number  (the same person can write to several numbers)
-conversation       = (instance, phone_number_id, wa_id)  → exactly one personal agent actor
-person             1──n conversation  (one per number they use; a person can be linked across them)
+person (actor)     1──n identity      (tel, wa-bsuid, mailto, ...; linked by claims: docs/identity.md)
+person             n──n phone number  (the same person can write to several numbers)
+conversation       = (our endpoint, the person) → one personal agent; its id is the key
+person             1──n conversation  (one per endpoint they use; history follows the person)
 person             n──n plan          (pairs, groups, waitlists; via plan participants)
 plan               n──n conversation  (the planner fans proposals out to each participant's
                                        conversation and fans replies back in)
@@ -141,7 +144,7 @@ Consequences:
 
 ## Phases
 
-1. One instance, in-process: actor runtime, personal agents, planner, Postgres. No
+1. One instance, in-process: runtime (worker + sender), personal agents, planner, Postgres. No
    agent-to-agent protocol.
 2. More roles (organizers, venues, sponsors) as separate agents with typed, A2A-shaped
    interfaces, still in-process.

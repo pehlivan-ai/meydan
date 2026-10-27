@@ -3,7 +3,7 @@
     uv run python scripts/readme_assets/flow.py
 
 Stages are isometric blocks; message dots travel between them. Three bubbles from one
-person enter the actor and leave as one reply (debounce). Animation is SMIL, which GitHub
+person enter the worker and leave as one reply (debounce). Animation is SMIL, which GitHub
 keeps in SVGs shown through <img>.
 """
 
@@ -14,7 +14,7 @@ OUT = Path(__file__).resolve().parents[2] / "docs" / "assets" / "readme"
 STAGES = [
     ("Webhook", "verify, store, 200 OK"),
     ("Inbox", "once per message id"),
-    ("Actor", "one per conversation"),
+    ("Worker", "one turn per conversation"),
     ("Outbox", "same transaction as state"),
     ("Sender", "paced, retried, dead letter"),
 ]
@@ -92,7 +92,7 @@ def render(t: dict) -> str:
             f'<text x="{x}" y="{Y + HH + DEPTH + 50}" text-anchor="middle" font-size="12" '
             f'fill="{t["muted"]}">{note}</text>'
         )
-    # Drawn over the blocks: a burst of three messages from one person reaches the actor...
+    # Drawn over the blocks: a burst of three messages from one person reaches the worker...
     for i in range(3):
         parts.append(dot(XS[0] - 70, XS[2], t["msg"], 5, (0.0, 0.4), i * 0.45))
     # ...and one reply leaves it.

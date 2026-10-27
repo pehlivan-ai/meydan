@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.2.1-1a9e8f">
+  <img alt="version" src="https://img.shields.io/badge/version-v0.3.0-1a9e8f">
   <img alt="python" src="https://img.shields.io/badge/python-3.12%2B-3776ab">
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-d98b1f">
 </p>
@@ -70,7 +70,7 @@ groups, agreeing on a time and place, filling a spot when someone drops out.
 Each deployment is an **instance**: one community, its own data, its own VM. Instances are
 designed to become peers in a network later (agent-to-agent, A2A-shaped messages).
 
-> Status: early (v0.2.1). Only the pieces marked *available* below exist today. The rest is the
+> Status: early (v0.3.0). Only the pieces marked *available* below exist today. The rest is the
 > plan, documented in [docs/architecture.md](docs/architecture.md).
 
 **New in v0.2:** the channel and the runtime. meydan can now hold real WhatsApp
@@ -79,9 +79,17 @@ conversations, and you only write what the agent says back, `reply(turn)`.
 **v0.2.1:** if the "typing…" indicator fails, the reply still goes out; errors that retrying
 can't fix (a wrong token, a malformed request) are marked permanent right away.
 
+**New in v0.3:** who is who. People, agents and organizations are **actors**; their addresses
+(phone numbers, WhatsApp business-scoped user ids, email later) are **identities**, linked only
+on evidence through append-only **claims** ([docs/identity.md](docs/identity.md)). A
+conversation has its own id, so it survives a person hiding or sharing their number; replies
+are one **turn** of one or more messages; `transcript()` reads a conversation on one clock.
+Upgrading a v0.2 instance changes the tables: backfill old rows with
+`meydan.runtime.identity.route` (one rule for old and new messages).
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/flow-dark.svg">
-  <img alt="Runtime flow: Webhook, Inbox, Actor, Outbox, Sender. Three messages from one person enter the actor and one reply leaves it." src="docs/assets/readme/flow-light.svg" width="100%">
+  <img alt="Runtime flow: Webhook, Inbox, Actor, Outbox, Sender. Three messages from one person enter the worker and one reply leaves it." src="docs/assets/readme/flow-light.svg" width="100%">
 </picture>
 
 ## What's in the box
@@ -93,7 +101,7 @@ can't fix (a wrong token, a malformed request) are marked permanent right away.
     <td align="center" width="33%"><img src="docs/assets/readme/mod-tools.webp" width="112" alt=""><br><b><code>meydan.tools</code></b><br><sub>Framework-agnostic tool contract, identity from the channel</sub><br><sub>✅ available</sub></td>
   </tr>
   <tr>
-    <td align="center"><img src="docs/assets/readme/mod-runtime.webp" width="112" alt=""><br><b><code>meydan.runtime</code></b><br><sub>Inbox → actor per conversation → outbox → sender, on Postgres</sub><br><sub>✅ available · new in v0.2</sub></td>
+    <td align="center"><img src="docs/assets/readme/mod-runtime.webp" width="112" alt=""><br><b><code>meydan.runtime</code></b><br><sub>Inbox → worker → outbox → sender, identities, on Postgres</sub><br><sub>✅ available · identities new in v0.3</sub></td>
     <td align="center"><img src="docs/assets/readme/mod-channels.webp" width="112" alt=""><br><b><code>meydan.channels.whatsapp</code></b><br><sub>WhatsApp Cloud API: webhooks in, messages out</sub><br><sub>✅ available · new in v0.2</sub></td>
     <td align="center"><img src="docs/assets/readme/mod-instance.webp" width="112" alt=""><br><b><code>templates/instance</code></b><br><sub>Compose stack, CI/CD, digest deploy with rollback</sub><br><sub>✅ available</sub></td>
   </tr>
@@ -113,7 +121,7 @@ can't fix (a wrong token, a malformed request) are marked permanent right away.
 | `meydan.clock` | One place that converts time: instance zone, injectable clock, localized date text, date windows at their precision ("Aralık 2026"), a day calendar for agent context | available |
 | `meydan.tools` | Framework-agnostic tool contract: `(ToolContext, **params) -> model`, identity from the channel, `ToolError` for business rules | available |
 | `templates/instance` | Docker Compose stack (Postgres 18, app, Caddy), CI/CD workflow, digest-pinned deploy with health check and rollback, one-time GCP setup | available |
-| `meydan.runtime` | Inbox (idempotent on message id) → one actor per conversation (advisory lock, debounce, resequencing, poison-message guard) → transactional outbox → sender (per-conversation order, bubble pacing, jittered retries, dead letter, receipt correlation). Postgres 18 | available (`meydan[runtime]`) |
+| `meydan.runtime` | Inbox (idempotent on message id) → identities (actors, addresses, evidence-based claims; [docs/identity.md](docs/identity.md)) → worker, one turn per conversation at a time (advisory lock, debounce, resequencing, poison-message guard) → transactional outbox → sender (per-conversation order, bubble pacing, jittered retries, dead letter, receipt correlation). Postgres 18 | available (`meydan[runtime]`) |
 | `meydan.channels.whatsapp` | WhatsApp Cloud API: signature check, webhook parsing (text, buttons, interactive, receipts) routed by `phone_number_id`, sending text/templates from the number written to, typing indicator, retryable vs permanent errors | available (`meydan[runtime]`) |
 | planning | Plan state machine, group consensus rules, matching, waitlist/backfill, reliability, consent | planned |
 | peers | Typed agent-to-agent messages between roles and, later, between instances | planned |
@@ -126,7 +134,7 @@ can't fix (a wrong token, a malformed request) are marked permanent right away.
 meydan is consumed as a pinned git dependency:
 
 ```
-uv add "meydan[llm,runtime] @ git+https://github.com/pehlivan-ai/meydan@v0.2.1"
+uv add "meydan[llm,runtime] @ git+https://github.com/pehlivan-ai/meydan@v0.3.0"
 ```
 
 For working on meydan and an instance at the same time, clone it next to the instance and point
@@ -168,10 +176,11 @@ from meydan.channels.whatsapp import WhatsAppCloud, parse_messages, parse_status
 from meydan.channels.base import Outbound
 from meydan.runtime import Runtime, Turn, define_tables
 
-runtime_tables = define_tables(Base.metadata)  # your Alembic migrates meydan_inbox/outbox
+runtime_tables = define_tables(Base.metadata)  # your Alembic migrates the meydan_* tables
 
 
 async def reply(turn: Turn) -> list[Outbound]:  # your personal agent
+    # turn.actor_id: who wrote, whichever address they used; key your domain data on it.
     return [Outbound.text_message(f"got: {turn.text}")]
 
 
