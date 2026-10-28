@@ -32,6 +32,7 @@ Who is who (actors, identities, claims) and how messages find their conversation
 ```
 channel webhook ─► inbound queue (idempotent on message id) ─► 200 OK
                          │
+        reader: "seen" ~1 s after arrival (docs/presence.md)
         worker: one turn per conversation at a time (Postgres advisory lock)
            debounce bursts ─► personal agent turn ─► tools / planner intents
                          │

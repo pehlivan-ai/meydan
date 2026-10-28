@@ -180,6 +180,9 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         Column("payload", JSONB(none_as_null=True)),
         Column("sent_at", DateTime(timezone=True), nullable=False),
         now_col("received_at"),
+        # Presence timeline (database clock): when we showed "seen" and "typing…" for it.
+        Column("read_at", DateTime(timezone=True)),
+        Column("typing_at", DateTime(timezone=True)),
         # Set when a turn consumed this message (or gave up on it).
         Column("processed_at", DateTime(timezone=True)),
         Column("attempts", Integer, nullable=False, server_default="0"),

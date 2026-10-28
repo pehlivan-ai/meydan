@@ -595,7 +595,7 @@ wheels = [
 
 [[package]]
 name = "meydan"
-version = "0.3.0"
+version = "0.3.1"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
@@ -631,7 +631,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2" },
     { name = "pydantic-ai-slim", extras = ["google", "openrouter"], marker = "extra == 'llm'", specifier = ">=2.61" },
     { name = "pydantic-settings", specifier = ">=2" },
-    { name = "sqlalchemy", marker = "extra == 'runtime'", specifier = ">=2" },
+    { name = "sqlalchemy", marker = "extra == 'runtime'", specifier = ">=2.1" },
     { name = "tenacity", marker = "extra == 'llm'", specifier = ">=9" },
 ]
 provides-extras = ["runtime", "llm"]

@@ -40,6 +40,7 @@ class FakeChannel:
     def __init__(self, fail: list[SendError] | None = None):
         self.sent: list[tuple[str, str, str]] = []
         self.typing_for: list[str] = []
+        self.events: list[tuple[str, str]] = []  # ("read" | "typing", message_id), in order
         self.fail = list(fail or [])
 
     async def send(self, from_number, to, message):
@@ -50,6 +51,10 @@ class FakeChannel:
 
     async def typing(self, from_number, message_id):
         self.typing_for.append(message_id)
+        self.events.append(("typing", message_id))
+
+    async def mark_read(self, from_number, message_id):
+        self.events.append(("read", message_id))
 
 
 def msg(
@@ -68,7 +73,8 @@ def msg(
 
 def runtime(db, handler, channel=None, **cfg) -> Runtime:
     engine, tables = db
-    defaults = dict(debounce_s=0, max_wait_s=0, chars_per_second=1e9)
+    # "instant" presence: no human-like delays in tests unless a test asks for them.
+    defaults = dict(debounce_s=0, max_wait_s=0, chars_per_second=1e9, presence="instant")
     return Runtime(
         engine, tables, channel or FakeChannel(), handler, RuntimeConfig(**(defaults | cfg))
     )

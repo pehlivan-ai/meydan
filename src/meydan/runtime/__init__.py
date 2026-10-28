@@ -15,11 +15,13 @@ from meydan.runtime.core import (
     transcript,
 )
 from meydan.runtime.identity import Routed
+from meydan.runtime.presence import Presence
 from meydan.runtime.tables import RuntimeTables, define_tables
 
 __all__ = [
     "Channel",
     "Handler",
+    "Presence",
     "Routed",
     "Runtime",
     "RuntimeConfig",

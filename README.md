@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.3.0-1a9e8f">
+  <img alt="version" src="https://img.shields.io/badge/version-v0.3.1-1a9e8f">
   <img alt="python" src="https://img.shields.io/badge/python-3.12%2B-3776ab">
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-d98b1f">
 </p>
@@ -70,7 +70,7 @@ groups, agreeing on a time and place, filling a spot when someone drops out.
 Each deployment is an **instance**: one community, its own data, its own VM. Instances are
 designed to become peers in a network later (agent-to-agent, A2A-shaped messages).
 
-> Status: early (v0.3.0). Only the pieces marked *available* below exist today. The rest is the
+> Status: early (v0.3.1). Only the pieces marked *available* below exist today. The rest is the
 > plan, documented in [docs/architecture.md](docs/architecture.md).
 
 **New in v0.2:** the channel and the runtime. meydan can now hold real WhatsApp
@@ -86,6 +86,10 @@ conversation has its own id, so it survives a person hiding or sharing their num
 are one **turn** of one or more messages; `transcript()` reads a conversation on one clock.
 Upgrading a v0.2 instance changes the tables: backfill old rows with
 `meydan.runtime.identity.route` (one rule for old and new messages).
+
+**v0.3.1:** presence. "Seen" about a second after a message arrives, then "typing…" when the reply
+starts, refreshed while a slow reply is still being made; one setting (`presence="human" |
+"instant" | "quiet"` or numbers), and a measurable timeline per turn ([docs/presence.md](docs/presence.md)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/flow-dark.svg">
@@ -134,7 +138,7 @@ Upgrading a v0.2 instance changes the tables: backfill old rows with
 meydan is consumed as a pinned git dependency:
 
 ```
-uv add "meydan[llm,runtime] @ git+https://github.com/pehlivan-ai/meydan@v0.3.0"
+uv add "meydan[llm,runtime] @ git+https://github.com/pehlivan-ai/meydan@v0.3.1"
 ```
 
 For working on meydan and an instance at the same time, clone it next to the instance and point

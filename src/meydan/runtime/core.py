@@ -4,9 +4,13 @@ Patterns (docs/architecture.md): Idempotent Receiver, Single Writer per conversa
 advisory lock), Aggregator (debounce bursts into one turn), Resequencer (order by the sender's
 timestamp), Transactional Outbox, Rate-limited sender with jittered retries and a dead letter.
 Each message is routed to a conversation through its sender's identity (meydan.runtime.identity).
+"Seen" and "typing…" follow the configured presence (meydan.runtime.presence); the inbox records
+when each happened (`read_at`, `typing_at`), so every turn has a measurable timeline.
 
-All "not before" times are computed on the database clock (`now()`), the same clock the queues
-are read with: an app server whose clock drifts can't stall or rush the sender.
+All times are taken on the database clock, the same clock the queues are read with, so an app
+server whose clock drifts can't stall or rush the sender. They use `clock_timestamp()`, not
+`now()`: Postgres' `now()` is the start of the transaction, and a turn's transaction spans the
+model's thinking time (pacing measured from it would already be in the past).
 
 Delivery is at least once end to end: if the process dies after the channel accepted a message
 but before we recorded it, that message is sent again. Channels offer no idempotency key.
@@ -18,23 +22,35 @@ import logging
 import random
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Protocol
 
 from sqlalchemy import Connection, Engine, case, func, insert, select, text, update
+from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from meydan.channels.base import Address, Inbound, Outbound, SendError, StatusUpdate
 from meydan.runtime import identity
+from meydan.runtime.presence import Presence
 from meydan.runtime.tables import RuntimeTables
 
 log = logging.getLogger("meydan.runtime")
 
 
+def _clock():
+    """The database's wall clock at this statement (see the module docstring: not `now()`)."""
+    return func.clock_timestamp()
+
+
 class Channel(Protocol):
     async def send(self, from_number: str, to: str, message: Outbound) -> str: ...
+
+    # Mark the message (and everything before it) read and show "typing…".
     async def typing(self, from_number: str, message_id: str) -> None: ...
+
+    # Optional: mark read without typing. Channels without it get no separate read receipts.
+    # async def mark_read(self, from_number: str, message_id: str) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -80,6 +96,8 @@ class RuntimeConfig:
     max_bubble_gap_s: float = 3.0
     poll_s: float = 0.5
     batch: int = 10
+    # "Seen" and "typing…": a style name ("human", "instant", "quiet") or a Presence with numbers.
+    presence: Presence | str = field(default_factory=Presence.human)
 
 
 _STATUS_RANK = {"pending": 0, "sent": 1, "delivered": 2, "read": 3}
@@ -100,6 +118,7 @@ class Runtime:
         self.channel = channel
         self.handler = handler
         self.cfg = config or RuntimeConfig()
+        self.presence = Presence.of(self.cfg.presence)
         self.on_failure = on_failure
 
     # --- receiving (call from the webhook, inside the request's transaction) -------------
@@ -163,7 +182,7 @@ class Runtime:
         else:
             return
         conn.execute(
-            update(o).where(cond).values(status=s.status, last_error=s.error, updated_at=func.now())
+            update(o).where(cond).values(status=s.status, last_error=s.error, updated_at=_clock())
         )
 
     # --- enqueueing (replies, and proactive messages from planners) -----------------------
@@ -202,7 +221,8 @@ class Runtime:
                     "turn_id": turn_id,
                     "seq": seq,
                     "message": m.to_payload(),
-                    "next_attempt_at": (start_at + offset) if start_at else func.now() + offset,
+                    "created_at": _clock(),
+                    "next_attempt_at": (start_at + offset) if start_at else _clock() + offset,
                 }
             )
         for row in rows:  # one statement per row: `next_attempt_at` may be a SQL expression
@@ -217,11 +237,59 @@ class Runtime:
         """See `transcript`."""
         return transcript(conn, self.t, conversation_id, limit)
 
+    # --- reader: "seen" shortly after a message arrives ------------------------------------
+
+    def _due_reads(self) -> list[dict[str, Any]]:
+        after = self.presence.read_after_s
+        if after is None:
+            return []
+        i = self.t.inbox
+        # The latest unread message of each conversation; marking it read covers earlier ones.
+        q = (
+            select(i.c.conversation_id, i.c.to, i.c.message_id, i.c.received_at)
+            .where(
+                i.c.read_at.is_(None),
+                i.c.processed_at.is_(None),  # answered messages need no separate "seen"
+                i.c.received_at <= _clock() - timedelta(seconds=after),
+            )
+            .order_by(i.c.conversation_id, i.c.sent_at.desc(), i.c.id.desc())
+            .ext(distinct_on(i.c.conversation_id))
+            .limit(self.cfg.batch)
+        )
+        with self.engine.connect() as conn:
+            return [dict(r) for r in conn.execute(q).mappings()]
+
+    def _set_read(self, conversation_id: uuid.UUID, up_to: datetime) -> None:
+        i = self.t.inbox
+        with self.engine.begin() as conn:
+            conn.execute(
+                update(i)
+                .where(
+                    i.c.conversation_id == conversation_id,
+                    i.c.read_at.is_(None),
+                    i.c.received_at <= up_to,
+                )
+                .values(read_at=_clock())
+            )
+
+    async def read_once(self) -> int:
+        """Send due read receipts (presence.read_after_s). Returns how many conversations."""
+        due = await asyncio.to_thread(self._due_reads)
+        mark_read = getattr(self.channel, "mark_read", None)
+        for row in due:
+            if mark_read is not None:
+                try:  # cosmetic: never let it break anything
+                    await mark_read(row["to"], row["message_id"])
+                except Exception:
+                    log.warning("read receipt failed for %s", row["conversation_id"], exc_info=True)
+            await asyncio.to_thread(self._set_read, row["conversation_id"], row["received_at"])
+        return len(due)
+
     # --- worker: one turn per conversation at a time ---------------------------------------
 
     def _due_conversations(self) -> list[uuid.UUID]:
         i = self.t.inbox
-        now = func.now()
+        now = _clock()
         q = (
             select(i.c.conversation_id)
             .where(i.c.processed_at.is_(None))
@@ -258,6 +326,8 @@ class Runtime:
                 ep.c.scheme.label("to_scheme"),
                 ep.c.scope.label("to_scope"),
                 cl.c.actor_id,
+                # Seconds since "seen", on the database clock (None: not read yet).
+                func.extract("epoch", _clock() - i.c.read_at).label("since_read"),
             )
             .join(ident, ident.c.id == i.c.sender_identity_id)
             .join(cv, cv.c.id == i.c.conversation_id)
@@ -283,10 +353,14 @@ class Runtime:
                 return 0
             turn = _turn_from_rows(key, rows)
             ids = [r["id"] for r in rows]
-            try:  # cosmetic: never let it break a turn
-                await self.channel.typing(turn.to, rows[-1]["message_id"])
-            except Exception:
-                log.warning("typing indicator failed for %s", key, exc_info=True)
+            last = rows[-1]["message_id"]
+            refresh = None
+            if self.presence.typing:
+                await self._read_then_wait(conn, turn, rows)
+                await self._typing(turn.to, last, key)
+                await asyncio.to_thread(self._stamp, conn, ids, "typing_at")
+                if self.presence.typing_refresh_s:
+                    refresh = asyncio.create_task(self._keep_typing(turn.to, last, key))
             try:
                 replies = await self.handler(turn)
             except Exception as e:
@@ -294,6 +368,9 @@ class Runtime:
                 log.exception("turn failed for %s", key)
                 await asyncio.to_thread(self._record_failure, turn, ids, e)
                 return 0
+            finally:
+                if refresh is not None:
+                    refresh.cancel()
 
             def commit() -> None:
                 self.enqueue(
@@ -313,9 +390,48 @@ class Runtime:
         finally:
             await asyncio.to_thread(conn.close)
 
+    async def _read_then_wait(
+        self, conn: Connection, turn: Turn, rows: list[dict[str, Any]]
+    ) -> None:
+        """Make sure the person has seen "seen" before "typing…", with the configured gap."""
+        since = rows[-1]["since_read"]
+        if since is None:  # the reader hasn't marked it yet (or read receipts are off)
+            mark_read = getattr(self.channel, "mark_read", None)
+            if mark_read is not None and self.presence.read_after_s is not None:
+                try:
+                    await mark_read(turn.to, rows[-1]["message_id"])
+                except Exception:
+                    log.warning("read receipt failed for %s", turn.conversation_id, exc_info=True)
+                await asyncio.to_thread(self._stamp, conn, [r["id"] for r in rows], "read_at")
+                since = 0.0
+            else:
+                return  # typing alone also marks read on WhatsApp; nothing to wait for
+        wait = self.presence.typing_after_read_s - float(since)
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+    async def _typing(self, to: str, message_id: str, key: uuid.UUID) -> None:
+        try:  # cosmetic: never let it break a turn
+            await self.channel.typing(to, message_id)
+        except Exception:
+            log.warning("typing indicator failed for %s", key, exc_info=True)
+
+    async def _keep_typing(self, to: str, message_id: str, key: uuid.UUID) -> None:
+        """Re-send "typing…" while a slow turn is still running (channels drop it after a while)."""
+        every = self.presence.typing_refresh_s or 0
+        while every > 0:
+            await asyncio.sleep(every)
+            await self._typing(to, message_id, key)
+
+    def _stamp(self, conn: Connection, ids: list, column: str) -> None:
+        i = self.t.inbox
+        conn.execute(
+            update(i).where(i.c.id.in_(ids), i.c[column].is_(None)).values({column: _clock()})
+        )
+
     def _mark_processed(self, conn: Connection, ids: list, error: str | None = None) -> None:
         i = self.t.inbox
-        conn.execute(update(i).where(i.c.id.in_(ids)).values(processed_at=func.now(), error=error))
+        conn.execute(update(i).where(i.c.id.in_(ids)).values(processed_at=_clock(), error=error))
 
     def _record_failure(self, turn: Turn, ids: list, exc: BaseException) -> None:
         i = self.t.inbox
@@ -389,7 +505,7 @@ class Runtime:
 
     async def _attempt(self, row: dict[str, Any]) -> dict[str, Any]:
         attempts = row["attempts"] + 1
-        base = {"attempts": attempts, "updated_at": func.now()}
+        base = {"attempts": attempts, "updated_at": _clock()}
         try:
             wamid = await self.channel.send(
                 row["from_number"], row["to"], Outbound.from_payload(row["message"])
@@ -401,12 +517,12 @@ class Runtime:
             wait = self._backoff(attempts, e.min_wait_s)
             return base | {
                 "last_error": e.reason,
-                "next_attempt_at": func.now() + timedelta(seconds=wait),
+                "next_attempt_at": _clock() + timedelta(seconds=wait),
             }
         return base | {
             "status": "sent",
             "channel_message_id": wamid,
-            "sent_at": func.now(),
+            "sent_at": _clock(),
             "last_error": None,
         }
 
@@ -421,7 +537,7 @@ class Runtime:
     # --- loops ----------------------------------------------------------------------------
 
     async def run(self, stop: asyncio.Event) -> None:
-        """Worker and sender loops until `stop` is set. Run as a background task."""
+        """Reader, worker and sender loops until `stop` is set. Run as a background task."""
 
         async def loop(step: Callable[[], Awaitable[int]], name: str) -> None:
             while not stop.is_set():
@@ -433,7 +549,11 @@ class Runtime:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(stop.wait(), timeout=self.cfg.poll_s)
 
-        await asyncio.gather(loop(self.work_once, "worker"), loop(self.send_once, "sender"))
+        await asyncio.gather(
+            loop(self.read_once, "reader"),
+            loop(self.work_once, "worker"),
+            loop(self.send_once, "sender"),
+        )
 
 
 def transcript(
