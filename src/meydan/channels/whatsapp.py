@@ -61,6 +61,18 @@ def _text_of(message: dict[str, Any]) -> str:
     return ""
 
 
+def reply_payload(message: Inbound) -> str | None:
+    """What a pressed button carries: a template quick reply's payload, or an interactive
+    button's id. None for anything else."""
+    raw = message.payload
+    if message.kind == "button":
+        return raw.get("button", {}).get("payload")
+    if message.kind == "interactive":
+        reply = raw.get("interactive", {}).get("button_reply") or {}
+        return reply.get("id")
+    return None
+
+
 def _values(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
     for entry in payload.get("entry", []):
         for change in entry.get("changes", []):
@@ -201,8 +213,20 @@ class WhatsAppCloud:
                 "name": message.template,
                 "language": {"code": message.language},
             }
+            components: list[dict[str, Any]] = []
             if params:
-                template["components"] = [{"type": "body", "parameters": params}]
+                components.append({"type": "body", "parameters": params})
+            for index, payload in enumerate(message.buttons):
+                components.append(
+                    {
+                        "type": "button",
+                        "sub_type": "quick_reply",
+                        "index": str(index),
+                        "parameters": [{"type": "payload", "payload": payload}],
+                    }
+                )
+            if components:
+                template["components"] = components
             body |= {"type": "template", "template": template}
         data = await self._post(from_number, body)
         return data["messages"][0]["id"]

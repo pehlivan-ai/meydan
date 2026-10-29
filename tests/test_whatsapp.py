@@ -10,6 +10,7 @@ from meydan.channels.whatsapp import (
     WhatsAppCloud,
     parse_messages,
     parse_statuses,
+    reply_payload,
     verify_signature,
 )
 
@@ -130,6 +131,34 @@ async def test_send_text_and_template_bodies():
         "parameter_name": "club",
         "text": "Moda",
     }
+
+
+async def test_template_buttons_carry_payloads_and_come_back():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"messages": [{"id": "wamid.Z"}]})
+
+    message = Outbound.template_message("invite", "tr", buttons=("accept:t1", "decline:t1"), n="A")
+    await cloud(handler).send("222", "905550000001", message)
+    components = seen[0]["template"]["components"]
+    assert components[0]["type"] == "body"
+    assert components[1:] == [
+        {"type": "button", "sub_type": "quick_reply", "index": str(i),
+         "parameters": [{"type": "payload", "payload": p}]}
+        for i, p in enumerate(("accept:t1", "decline:t1"))
+    ]  # fmt: skip
+    assert Outbound.from_payload(message.to_payload()) == message  # survives the outbox
+
+    pressed = parse_messages(
+        {"entry": [{"changes": [{"field": "messages", "value": {
+            "metadata": {"phone_number_id": "222"},
+            "messages": [{"from": "905550000001", "id": "wamid.B", "timestamp": "1793300000",
+                          "type": "button", "button": {"text": "Accept", "payload": "accept:t1"}}],
+        }}]}]}
+    )  # fmt: skip
+    assert pressed[0].text == "Accept" and reply_payload(pressed[0]) == "accept:t1"
 
 
 async def test_send_to_bsuid_uses_recipient():

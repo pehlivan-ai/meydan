@@ -65,14 +65,21 @@ class Outbound:
     template: str | None = None
     language: str | None = None
     params: dict[str, str] = field(default_factory=dict)  # NAMED template parameters
+    # Template quick-reply buttons, in order: the payload each one sends back when pressed
+    # (e.g. an invite token), so the reply can be matched to what it answers.
+    buttons: tuple[str, ...] = ()
 
     @classmethod
     def text_message(cls, text: str) -> "Outbound":
         return cls(kind="text", text=text)
 
     @classmethod
-    def template_message(cls, name: str, language: str, **params: str) -> "Outbound":
-        return cls(kind="template", template=name, language=language, params=params)
+    def template_message(
+        cls, name: str, language: str, *, buttons: tuple[str, ...] = (), **params: str
+    ) -> "Outbound":
+        return cls(
+            kind="template", template=name, language=language, params=params, buttons=buttons
+        )
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -81,11 +88,12 @@ class Outbound:
             "template": self.template,
             "language": self.language,
             "params": self.params,
+            "buttons": list(self.buttons),
         }
 
     @classmethod
     def from_payload(cls, data: dict[str, Any]) -> "Outbound":
-        return cls(**data)
+        return cls(**{**data, "buttons": tuple(data.get("buttons") or ())})
 
 
 class SendError(Exception):
