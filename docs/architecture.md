@@ -53,8 +53,17 @@ language) without touching the others. Postgres is the only infrastructure.
   (only 1 hour on numbers with No Storage enabled), so a receiver that is down for a while
   still gets the backlog, all at once and unordered.
 - Events can arrive **out of order**; order by the message `timestamp`, not arrival time.
-- One Meta app has **one** webhook URL; each WhatsApp Business Account (WABA) must be
+- One Meta app has **one** webhook URL; each messaging account (formerly the WABA) must be
   **subscribed explicitly** to the app. Several endpoints need several apps.
+- **Account model (2026):** Meta split the WABA in two. The **WhatsApp account** holds the
+  phone number, display name, quality rating and messaging limits, and always belongs to the
+  business. A **messaging account** (keeps the old WABA id) holds templates, the payment method
+  and webhook subscriptions, one per solution provider; one number can be served by several
+  messaging accounts at once. Meta picks the messaging account from the app that sends;
+  `messaging_account_id` is needed only when one provider holds several on the same number.
+  New account ids arrive in 2027 and become mandatory in 2028 (as reported; check Meta's docs).
+  Throughput (per number) and messaging limits (per portfolio) are shared by every provider on
+  the number.
 - Sending is a plain HTTPS call (`POST /{phone-number-id}/messages`) that returns a message id
   (`wamid`); its fate (`sent → delivered → read`, or `failed`) comes back later as webhooks.
 - Per recipient there is a **pair rate limit**: bursts are allowed, then sends to that user are
@@ -101,8 +110,9 @@ The integration is many-to-many at several levels, so meydan never assumes "one 
 app, one community":
 
 ```
-Business portfolio 1──n WABA 1──n phone number (phone_number_id)
-Meta app           n──n WABA          (a WABA can be subscribed to several apps; one app, one URL)
+Business portfolio 1──n WhatsApp account 1──n phone number (phone_number_id)
+phone number       n──n messaging account (one per solution provider: templates, payment, webhooks)
+Meta app           n──n messaging account (subscribed to apps; one app, one URL)
 phone number       n──1 instance      (routing table: phone_number_id → instance)
 instance           1──n phone number  (e.g. a temporary and a local number side by side)
 person (actor)     1──n identity      (tel, wa-bsuid, mailto, ...; linked by claims: docs/identity.md)
@@ -120,6 +130,11 @@ Consequences:
   one instance per receiver; both are routing-table configurations.
 - **Reply affinity**: a reply always goes out from the `phone_number_id` the person wrote to,
   since the 24 h window, templates and pair rate limits are all per (number, recipient).
+- **Shared numbers**: meydan keys on `phone_number_id` and the portfolio (BSUID scope), never on a
+  WABA or messaging account id, so the 2026 account split changes nothing in routing. When
+  another provider serves the same number, meydan's one-reply-per-message guarantee holds only
+  inside meydan: which provider answers which conversation is an operator decision (open: how
+  Meta delivers inbound webhooks to several messaging accounts).
 - **Fan-out / fan-in** for groups: the planner never talks to people directly. It writes one
   proposal per participant into each participant's conversation (outbox), and each personal
   agent turns replies into typed answers the planner aggregates (Scatter-Gather).
