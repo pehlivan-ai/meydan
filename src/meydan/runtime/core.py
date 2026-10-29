@@ -30,10 +30,17 @@ from sqlalchemy import Connection, Engine, case, func, insert, select, text, upd
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from meydan.channels.base import Address, Inbound, Outbound, SendError, StatusUpdate
+from meydan.channels.base import (
+    Address,
+    Inbound,
+    Outbound,
+    SendError,
+    StatusUpdate,
+    TemplateUpdate,
+)
 from meydan.observe.context import TurnContext, turn_scope
 from meydan.observe.record import write_turn
-from meydan.runtime import identity
+from meydan.runtime import identity, templates
 from meydan.runtime.presence import Presence
 from meydan.runtime.tables import RuntimeTables
 
@@ -138,9 +145,14 @@ class Runtime:
     # --- receiving (call from the webhook, inside the request's transaction) -------------
 
     def receive(
-        self, conn: Connection, messages: Sequence[Inbound], statuses: Sequence[StatusUpdate]
+        self,
+        conn: Connection,
+        messages: Sequence[Inbound],
+        statuses: Sequence[StatusUpdate],
+        template_updates: Sequence[TemplateUpdate] = (),
     ) -> int:
-        """Store new messages (duplicates are ignored) and apply delivery receipts.
+        """Store new messages (duplicates are ignored), apply delivery receipts and what the
+        channel says about our templates (held messages are released or given up).
 
         Returns how many messages were new. Cheap: safe to call before answering 200.
         """
@@ -186,6 +198,7 @@ class Runtime:
                 self._intercept(conn, m, routed, inserted[0][0])
         for s in statuses:
             self._apply_status(conn, s)
+        templates.record_all(conn, self.t, template_updates)
         return new
 
     def _intercept(
@@ -575,11 +588,27 @@ class Runtime:
                     conn.rollback()
                     return attempted
                 attempted += 1
-                values = await self._attempt(row)
+                values = await asyncio.to_thread(self._template_check, conn, row)
+                if values is None:
+                    values = await self._attempt(row)
                 await asyncio.to_thread(self._save_attempt, conn, row["id"], values)
             finally:
                 await asyncio.to_thread(conn.close)
         return attempted
+
+    def _template_check(self, conn: Connection, row: dict[str, Any]) -> dict[str, Any] | None:
+        """None: go ahead. Otherwise the row's new state: held out of the line until its
+        template is sendable again, or dead if the template won't come back."""
+        message = Outbound.from_payload(row["message"])
+        if message.kind != "template":
+            return None
+        verdict, why = templates.verdict(conn, self.t, row["channel"], message)
+        if verdict == "send":
+            return None
+        if verdict == "fail":
+            log.warning("dead letter %s: %s", row["id"], why)
+        status = "held" if verdict == "hold" else "dead"
+        return {"status": status, "last_error": why, "updated_at": _clock()}
 
     async def _attempt(self, row: dict[str, Any]) -> dict[str, Any]:
         attempts = row["attempts"] + 1

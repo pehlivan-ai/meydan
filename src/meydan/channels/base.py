@@ -57,6 +57,24 @@ class StatusUpdate:
 
 
 @dataclass(frozen=True)
+class TemplateUpdate:
+    """What the channel says about one of our message templates (review, pauses, category,
+    quality). Fields the event doesn't speak about are None."""
+
+    channel: str
+    account: str  # the business account that owns it (WhatsApp: the WABA id)
+    name: str
+    language: str
+    at: datetime  # when the channel reported it
+    external_id: str | None = None  # the channel's template id
+    status: str | None = None  # APPROVED | PENDING | REJECTED | PAUSED | DISABLED | ...
+    category: str | None = None  # current category
+    upcoming_category: str | None = None  # announced change, e.g. to MARKETING in 24 hours
+    quality: str | None = None  # GREEN | YELLOW | RED | UNKNOWN
+    reason: str | None = None  # why it was rejected or paused, in the channel's words
+
+
+@dataclass(frozen=True)
 class Outbound:
     """Something to send in a conversation: free-form text or an approved template."""
 
@@ -75,10 +93,11 @@ class Outbound:
 
     @classmethod
     def template_message(
-        cls, name: str, language: str, *, buttons: tuple[str, ...] = (), **params: str
+        cls, template: str, language: str, /, *, buttons: tuple[str, ...] = (), **params: str
     ) -> "Outbound":
+        # Positional-only, so a template parameter may be called `name` or `template` too.
         return cls(
-            kind="template", template=name, language=language, params=params, buttons=buttons
+            kind="template", template=template, language=language, params=params, buttons=buttons
         )
 
     def to_payload(self) -> dict[str, Any]:

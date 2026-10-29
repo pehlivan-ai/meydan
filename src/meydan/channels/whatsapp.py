@@ -13,7 +13,14 @@ from typing import Any
 
 import httpx
 
-from meydan.channels.base import Address, Inbound, Outbound, SendError, StatusUpdate
+from meydan.channels.base import (
+    Address,
+    Inbound,
+    Outbound,
+    SendError,
+    StatusUpdate,
+    TemplateUpdate,
+)
 
 CHANNEL = "whatsapp"
 GRAPH = "https://graph.facebook.com"
@@ -139,6 +146,53 @@ def parse_messages(payload: dict[str, Any], portfolio: str = "") -> list[Inbound
     return out
 
 
+def parse_template_updates(payload: dict[str, Any]) -> list[TemplateUpdate]:
+    """What WhatsApp says about our templates: review and pauses
+    (message_template_status_update), category (template_category_update) and quality
+    (message_template_quality_update). Told apart by their content, not the field name."""
+    out = []
+    for entry in payload.get("entry", []):
+        account, at = str(entry.get("id", "")), _ts(entry.get("time") or 0)
+        for change in entry.get("changes", []):
+            v = change.get("value", {})
+            if "message_template_name" not in v:
+                continue
+            template_id = v.get("message_template_id")
+            common = {
+                "channel": CHANNEL,
+                "account": account,
+                "name": v["message_template_name"],
+                "language": v.get("message_template_language", ""),
+                "at": at,
+                "external_id": str(template_id) if template_id else None,
+            }
+            if "event" in v:  # review, pause, unpause, disable, delete
+                info = v.get("rejection_info") or {}
+                reason = info.get("reason") or v.get("reason") or v.get("title")
+                out.append(
+                    TemplateUpdate(
+                        **common,
+                        status=v["event"],
+                        category=v.get("message_template_category"),
+                        reason=None if reason in (None, "NONE") else reason,
+                    )
+                )
+            elif "new_quality_score" in v:
+                out.append(TemplateUpdate(**common, quality=v["new_quality_score"]))
+            elif "new_category" in v:
+                if v.get("correct_category"):  # announced: it changes in about 24 hours
+                    out.append(
+                        TemplateUpdate(
+                            **common,
+                            category=v["new_category"],
+                            upcoming_category=v["correct_category"],
+                        )
+                    )
+                else:
+                    out.append(TemplateUpdate(**common, category=v["new_category"]))
+    return out
+
+
 def parse_statuses(payload: dict[str, Any]) -> list[StatusUpdate]:
     """Delivery receipts for messages we sent."""
     out = []
@@ -196,6 +250,39 @@ class WhatsAppCloud:
         if r.status_code == 429 or r.status_code >= 500:
             raise SendError(reason, retryable=True, code=code)
         raise SendError(reason, retryable=False, code=code)
+
+    async def list_templates(self, account: str) -> list[TemplateUpdate]:
+        """Every template of a business account as it stands now (for a sync at startup).
+        Needs the whatsapp_business_management permission."""
+        url = f"{GRAPH}/{self._version}/{account}/message_templates"
+        params: dict[str, Any] | None = {
+            "fields": "id,name,language,status,category,quality_score",
+            "limit": 100,
+        }
+        now, out = datetime.now(UTC), []
+        while url:
+            r = await self._client.get(
+                url, params=params, headers={"Authorization": f"Bearer {self._token}"}
+            )
+            r.raise_for_status()
+            data = r.json()
+            for tpl in data.get("data", []):
+                quality = tpl.get("quality_score")
+                out.append(
+                    TemplateUpdate(
+                        channel=CHANNEL,
+                        account=account,
+                        name=tpl["name"],
+                        language=tpl.get("language", ""),
+                        at=now,
+                        external_id=str(tpl["id"]) if tpl.get("id") else None,
+                        status=tpl.get("status"),
+                        category=tpl.get("category"),
+                        quality=quality.get("score") if isinstance(quality, dict) else quality,
+                    )
+                )
+            url, params = data.get("paging", {}).get("next"), None  # `next` carries the query
+        return out
 
     async def send(self, from_number: str, to: str, message: Outbound) -> str:
         """Send one message; returns the channel message id (wamid).

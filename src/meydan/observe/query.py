@@ -430,6 +430,49 @@ def costs(
     )
 
 
+# --- templates -------------------------------------------------------------------------------
+
+
+class TemplateRow(BaseModel):
+    channel: str
+    name: str
+    language: str
+    status: str | None
+    category: str | None
+    upcoming_category: str | None  # announced change, e.g. to MARKETING
+    quality: str | None
+    reason: str | None
+    status_at: datetime | None
+    held: int  # messages waiting for it to become sendable again
+
+
+def templates(
+    conn: Connection, t: RuntimeTables, who: Principal, *, visibility: Visibility = NEED_TO_KNOW
+) -> list[TemplateRow]:
+    """Our message templates as the channel last described them, with held messages."""
+    _need(who, visibility.operations)
+    tp, o = t.templates, t.outbox
+    held = (
+        select(func.count())
+        .where(
+            o.c.status == "held",
+            o.c.channel == tp.c.channel,
+            o.c.message["template"].astext == tp.c.name,
+            o.c.message["language"].astext == tp.c.language,
+        )
+        .scalar_subquery()
+    )
+    rows = conn.execute(select(tp, held.label("held")).order_by(tp.c.name, tp.c.language))
+    return [
+        TemplateRow(
+            channel=r.channel, name=r.name, language=r.language, status=r.status,
+            category=r.category, upcoming_category=r.upcoming_category, quality=r.quality,
+            reason=r.reason, status_at=r.status_at, held=r.held,
+        )
+        for r in rows
+    ]  # fmt: skip
+
+
 # --- problems --------------------------------------------------------------------------------
 
 
@@ -475,10 +518,12 @@ __all__ = [
     "NotAllowedError",
     "Overview",
     "Problem",
+    "TemplateRow",
     "conversation",
     "conversations",
     "costs",
     "mask",
     "overview",
     "problems",
+    "templates",
 ]

@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.8.0-1a9e8f">
+  <img alt="version" src="https://img.shields.io/badge/version-v0.9.0-1a9e8f">
   <img alt="python" src="https://img.shields.io/badge/python-3.12%2B-3776ab">
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-d98b1f">
 </p>
@@ -83,10 +83,10 @@ groups, agreeing on a time and place, filling a spot when someone drops out.
 Each deployment is an **instance**: one community, its own data, its own VM. Instances are
 designed to become peers in a network later (agent-to-agent, A2A-shaped messages).
 
-> Status: early (v0.8.0). Only the pieces marked *available* below exist today. The rest is the
+> Status: early (v0.9.0). Only the pieces marked *available* below exist today. The rest is the
 > plan, documented in [docs/architecture.md](docs/architecture.md).
 
-Latest: **v0.8.0**, template buttons that answer back. What changed in each release:
+Latest: **v0.9.0**, templates the sender knows: held while pending or paused, sent when approved. What changed in each release:
 [CHANGELOG.md](CHANGELOG.md).
 
 <picture>
@@ -128,6 +128,7 @@ Latest: **v0.8.0**, template buttons that answer back. What changed in each rele
 | `meydan.observe` | One record per turn and per model call (timing, tokens, cost), written with the reply; read models (overview, conversations, transcripts, costs, problems) with an HTTP surface ([docs/observe.md](docs/observe.md)) | available (`meydan[api]` for HTTP) |
 | `meydan.auth` | Sign in by sending a code from an address meydan knows; sessions and scopes, hashed, deny by default ([docs/auth.md](docs/auth.md)) | available (`meydan[api]`) |
 | `meydan.access` | Roles in your OpenFGA model file, assignments as rows in your database, mirrored through an outbox ([docs/access.md](docs/access.md)) | available (`meydan[access]`) |
+| `meydan.runtime.templates` | Each template's state from the channel (review, pauses, category, quality); the sender sends, holds or gives up accordingly ([docs/templates.md](docs/templates.md)) | available (`meydan[runtime]`) |
 | `meydan.visibility` | What a signed-in person sees: two presets, then per item; applied inside the read models ([docs/visibility.md](docs/visibility.md)) | available |
 | planning | Plan state machine, group consensus rules, matching, waitlist/backfill, reliability, consent | planned |
 | peers | Typed agent-to-agent messages between roles and, later, between instances | planned |
@@ -348,7 +349,7 @@ several apps, it becomes a part.
 meydan is consumed as a pinned git dependency:
 
 ```
-uv add "meydan[llm,runtime,api,access] @ git+https://github.com/pehlivan-ai/meydan@v0.8.0"
+uv add "meydan[llm,runtime,api,access] @ git+https://github.com/pehlivan-ai/meydan@v0.9.0"
 ```
 
 For working on meydan and an instance at the same time, clone it next to the instance and point
@@ -404,7 +405,7 @@ once real instances need it; the order may change with what they need.
 | Next | What | Builds on |
 |---|---|---|
 | 1 | **Booking**: offering → slot → booking (`proposed → held → confirmed → done / no_show / cancelled`), freed time offered to a waitlist in order | identities, clock |
-| 2 | **Proactive messages**: reminders and offers on a schedule, the 24-hour window with template fallback, consent per purpose. *Started:* templates with buttons that answer back (v0.8.0) | outbox, templates, clock |
+| 2 | **Proactive messages**: reminders and offers on a schedule, the 24-hour window with template fallback, consent per purpose. *Started:* templates with buttons that answer back (v0.8.0), template state with hold and resume (v0.9.0) | outbox, templates, clock |
 | 3 | **Outcome ledger**: which conversation led to which booking, and who confirmed it | booking, conversations |
 | 4 | **Second channel** (Telegram), **handoff** to a human and back, calendar adapters | channel contract, runtime |
 | 5 | **Relations** between actors (acts for, member of), linking addresses on proof | identity claims |

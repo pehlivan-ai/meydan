@@ -40,7 +40,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
-OUTBOX_STATUSES = ("pending", "sent", "delivered", "read", "failed", "dead")
+# held: a template message waiting for its template to become sendable again (out of the line).
+OUTBOX_STATUSES = ("pending", "held", "sent", "delivered", "read", "failed", "dead")
 ACTOR_KINDS = ("person", "agent", "org")
 CLAIM_STATES = ("proposed", "active")
 CLAIM_END_REASONS = ("revoked", "superseded", "dismissed", "expired")
@@ -67,6 +68,7 @@ class RuntimeTables:
     audit: Table
     access_outbox: Table
     access_state: Table
+    templates: Table
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -383,6 +385,27 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         now_col("updated_at"),
     )
 
+    # The channel's message templates as it last described them (webhooks and syncs). The
+    # sender checks them before sending a template: send, hold until sendable, or give up.
+    templates = Table(
+        f"{prefix}templates",
+        metadata,
+        id_col(),
+        Column("channel", String(20), nullable=False),
+        Column("account", String(64), nullable=False, server_default=""),
+        Column("name", String(512), nullable=False),
+        Column("language", String(20), nullable=False),
+        Column("external_id", String(64)),
+        Column("status", String(30)),  # the channel's words: APPROVED, PENDING, PAUSED, ...
+        Column("category", String(30)),
+        Column("upcoming_category", String(30)),
+        Column("quality", String(20)),
+        Column("reason", Text),
+        Column("status_at", DateTime(timezone=True)),  # channel time of the status we keep
+        now_col("updated_at"),
+        UniqueConstraint("channel", "name", "language"),
+    )
+
     return RuntimeTables(
         actors=actors,
         identities=identities,
@@ -399,4 +422,5 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         audit=audit,
         access_outbox=access_outbox,
         access_state=access_state,
+        templates=templates,
     )

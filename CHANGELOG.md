@@ -4,6 +4,22 @@ What changed in each release. Format: [Keep a Changelog](https://keepachangelog.
 versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor version may change
 tables or APIs; the entry says how to upgrade).
 
+## [0.9.0] - 2026-10-30
+### Added
+- Templates: meydan keeps each template's state from the channel (review, pauses, category,
+  quality) and the sender checks it: approved or unknown is sent; waiting (PENDING, PAUSED, ...) is
+  held out of the conversation's line and sent once the template is sendable again; rejected or
+  disabled is given up with the reason ([docs/templates.md](docs/templates.md)).
+- `parse_template_updates(payload)` for the three WhatsApp template webhooks; `runtime.receive(...,
+  template_updates)`; `WhatsAppCloud.list_templates(account)` and `templates.sync(...)` for a sync
+  at startup; read model `observe.query.templates` and `GET /observe/templates`.
+### Changed
+- `Outbound.template_message(template, language, /, ...)`: the first two arguments are positional,
+  so a template parameter may be called `name`.
+### Upgrading
+- New table `meydan_templates`, and the outbox status `held`: generate a migration in your app
+  (the outbox status CHECK constraint changes; autogenerate may not see that, so add it by hand).
+
 ## [0.8.0] - 2026-10-29
 ### Added
 - Template buttons that answer back: quick-reply buttons carry a payload you choose when sending
@@ -81,6 +97,7 @@ tables or APIs; the entry says how to upgrade).
 - `meydan.llm` (models from spec strings, fallbacks, one retry layer), `meydan.clock`,
   `meydan.tools`, and the instance template (Compose, CI/CD, digest deploy with rollback).
 
+[0.9.0]: https://github.com/pehlivan-ai/meydan/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/pehlivan-ai/meydan/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/pehlivan-ai/meydan/compare/v0.6.1...v0.7.0
 [0.6.1]: https://github.com/pehlivan-ai/meydan/compare/v0.6.0...v0.6.1

@@ -22,6 +22,7 @@ from meydan.observe.query import (
     NotAllowedError,
     Overview,
     Problem,
+    TemplateRow,
 )
 from meydan.visibility import Visibility
 
@@ -71,5 +72,10 @@ def routes(auth: Auth, visibility: Visibility = NEED_TO_KNOW) -> APIRouter:
     ) -> list[Problem]:
         """Failed turns and dead letters, newest first."""
         return read(query.problems, person, hours)
+
+    @router.get("/templates")
+    def templates(person: signed_in) -> list[TemplateRow]:
+        """Message templates: review status, category, quality, messages held for them."""
+        return read(query.templates, person)
 
     return router
