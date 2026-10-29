@@ -36,8 +36,8 @@ A person always sees their own conversations, text included.
 ```python
 from meydan.visibility import Rule, Visibility
 
-Visibility.need_to_know()   # the default: each item needs its own scope
-Visibility.trusted("ops")   # a small trusted team: whoever holds "ops" sees everything
+Visibility.need_to_know()  # the default: each item needs its own scope
+Visibility.trusted("ops")  # a small trusted team: whoever holds "ops" sees everything
 ```
 
 | Item | `need_to_know()` | `trusted(scope)` |
@@ -59,7 +59,7 @@ stay); a `Rule` replaces the whole rule:
 
 ```python
 visibility = Visibility.need_to_know(
-    addresses="messages:read",                       # whoever reads text sees numbers too
+    addresses="messages:read",  # whoever reads text sees numbers too
     agent_details="costs:read",
     message_text=Rule("messages:read", audit=True),
 )
