@@ -55,23 +55,16 @@ language) without touching the others. Postgres is the only infrastructure.
 - Events can arrive **out of order**; order by the message `timestamp`, not arrival time.
 - One Meta app has **one** webhook URL; each messaging account (formerly the WABA) must be
   **subscribed explicitly** to the app. Several endpoints need several apps.
-- **Account model (2026)** ([accounts](https://developers.facebook.com/documentation/business-messaging/whatsapp/whatsapp-business-accounts)):
-  a **WhatsApp account** holds one business phone number (Meta's account notice: display name,
-  quality rating and messaging limits are viewed there). A **messaging account** holds templates,
-  billing and webhook subscriptions; the existing WABA id now identifies it, unchanged. Each
-  partner has its own messaging account and one number can carry several. Send with
-  `messaging_account_id` only when the token reaches more than one; otherwise Meta resolves it.
-  WhatsApp account ids come "in a later phase" (no dates in Meta's docs).
-- **Limits** are not per messaging account:
-  [throughput](https://developers.facebook.com/documentation/business-messaging/whatsapp/throughput)
-  is per phone number (80 mps default, inbound and outbound counted), and
-  [messaging limits](https://developers.facebook.com/documentation/business-messaging/whatsapp/messaging-limits)
-  are per business portfolio, shared by all its numbers.
+- **Accounts** ([docs](https://developers.facebook.com/documentation/business-messaging/whatsapp/whatsapp-business-accounts)): a WhatsApp account holds one number; a
+  messaging account (the old WABA id) holds templates, billing and webhooks, one per partner, several
+  per number. `messaging_account_id` only when a token reaches more than one.
+- **Limits**: [throughput](https://developers.facebook.com/documentation/business-messaging/whatsapp/throughput) per number (80 mps); [messaging limits](https://developers.facebook.com/documentation/business-messaging/whatsapp/messaging-limits)
+  per portfolio.
 - Sending is a plain HTTPS call (`POST /{phone-number-id}/messages`) that returns a message id
   (`wamid`); its fate (`sent → delivered → read`, or `failed`) comes back later as webhooks.
 - Per recipient there is a **pair rate limit**: bursts are allowed, then sends to that user are
   throttled (Meta's example: after a burst of 20, wait ~2 minutes); retry with backoff
-  (Meta suggests 4^n seconds).
+  (Meta suggests 4^n seconds; [docs](https://developers.facebook.com/documentation/business-messaging/whatsapp/about-the-platform)).
 - Business-initiated messages outside the **24-hour customer service window** must be approved
   **templates**; free-form replies are only allowed inside the window.
 

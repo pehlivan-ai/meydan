@@ -13,6 +13,8 @@ Two groups (docs/identity.md):
   Messages point to identities, never to actors, so re-linking identities never rewrites history.
 - **What it took:** one row per turn (timing, status, tokens, cost) and one per model call
   (docs/observe.md), written in the same transaction as the reply.
+- **Who may use the app:** sign-ins (proof of control through a channel), sessions and grants
+  (scopes per actor) (docs/auth.md). Secrets are stored only as hashes.
 """
 
 from dataclasses import dataclass
@@ -57,6 +59,9 @@ class RuntimeTables:
     outbox: Table
     turns: Table
     usage: Table
+    sign_ins: Table
+    sessions: Table
+    grants: Table
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -281,6 +286,54 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
     )
     Index(f"ix_{prefix}usage_turn", usage.c.turn_id)
 
+    sign_ins = Table(
+        f"{prefix}sign_ins",
+        metadata,
+        id_col(),
+        Column("code_hash", String(64), nullable=False, unique=True),  # what the person sends
+        Column("browser_hash", String(64), nullable=False, unique=True),  # what the browser holds
+        Column("audience", String(40), nullable=False),  # e.g. "ops": the scope a signer must hold
+        now_col("created_at"),
+        Column("expires_at", DateTime(timezone=True), nullable=False),
+        Column("confirmed_at", DateTime(timezone=True)),
+        Column("actor_id", UUID(as_uuid=True), ref("actors")),  # who confirmed it
+        Column("identity_id", UUID(as_uuid=True), ref("identities")),  # from which address
+        Column("claimed_at", DateTime(timezone=True)),  # when the browser got its session
+    )
+
+    sessions = Table(
+        f"{prefix}sessions",
+        metadata,
+        id_col(),
+        Column("token_hash", String(64), nullable=False, unique=True),
+        Column("actor_id", UUID(as_uuid=True), ref("actors"), nullable=False),
+        Column("audience", String(40), nullable=False),
+        now_col("created_at"),
+        now_col("last_seen_at"),
+        Column("expires_at", DateTime(timezone=True), nullable=False),
+        Column("revoked_at", DateTime(timezone=True)),
+        Column("label", String(200)),  # e.g. the browser, for "where am I signed in"
+    )
+    Index(f"ix_{prefix}sessions_actor", sessions.c.actor_id)
+
+    grants = Table(
+        f"{prefix}grants",
+        metadata,
+        id_col(),
+        Column("actor_id", UUID(as_uuid=True), ref("actors"), nullable=False),
+        Column("scope", String(80), nullable=False),  # e.g. "ops", "costs:read"
+        Column("granted_by", UUID(as_uuid=True), ref("actors")),  # None: granted by an operator CLI
+        now_col("created_at"),
+        Column("revoked_at", DateTime(timezone=True)),
+    )
+    Index(
+        f"uq_{prefix}grants_open",
+        grants.c.actor_id,
+        grants.c.scope,
+        unique=True,
+        postgresql_where=grants.c.revoked_at.is_(None),
+    )
+
     return RuntimeTables(
         actors=actors,
         identities=identities,
@@ -291,4 +344,7 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         outbox=outbox,
         turns=turns,
         usage=usage,
+        sign_ins=sign_ins,
+        sessions=sessions,
+        grants=grants,
     )
