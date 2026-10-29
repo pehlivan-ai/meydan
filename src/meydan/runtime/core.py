@@ -84,16 +84,6 @@ class Said:
     turn_id: uuid.UUID | None = None  # outbound: messages of one reply share it
 
 
-@dataclass(frozen=True)
-class Intercepted:
-    """A message handled before the agent (e.g. a sign-in code): no turn runs for it, and these
-    replies, if any, are sent."""
-
-    replies: Sequence[Outbound] = ()
-
-
-# Looks at each new message before any turn; returns Intercepted to consume it, None to pass.
-Interceptor = Callable[[Connection, Inbound, "identity.Routed"], Intercepted | None]
 Handler = Callable[[Turn], Awaitable[Sequence[Outbound]]]
 FailureReply = Callable[[Turn, BaseException], Sequence[Outbound]]
 
@@ -124,7 +114,6 @@ class Runtime:
         handler: Handler,
         config: RuntimeConfig | None = None,
         on_failure: FailureReply | None = None,
-        intercept: Sequence[Interceptor] = (),
     ):
         self.engine = engine
         self.t = tables
@@ -132,7 +121,6 @@ class Runtime:
         self.handler = handler
         self.cfg = config or RuntimeConfig()
         self.presence = Presence.of(self.cfg.presence)
-        self.intercept = list(intercept)
         self.on_failure = on_failure
 
     # --- receiving (call from the webhook, inside the request's transaction) -------------
@@ -180,36 +168,10 @@ class Runtime:
                 .on_conflict_do_nothing()
                 .returning(self.t.inbox.c.id)
             )
-            inserted = conn.execute(stmt).all()  # rowcount is unreliable with ON CONFLICT
-            new += len(inserted)
-            if inserted:
-                self._intercept(conn, m, routed, inserted[0][0])
+            new += len(conn.execute(stmt).all())  # rowcount is unreliable with ON CONFLICT
         for s in statuses:
             self._apply_status(conn, s)
         return new
-
-    def _intercept(
-        self, conn: Connection, m: Inbound, routed: "identity.Routed", inbox_id: uuid.UUID
-    ) -> None:
-        """Let interceptors consume a new message before any turn (first one wins)."""
-        for intercept in self.intercept:
-            result = intercept(conn, m, routed)
-            if result is None:
-                continue
-            i = self.t.inbox
-            conn.execute(
-                update(i).where(i.c.id == inbox_id).values(processed_at=_clock(), read_at=_clock())
-            )
-            self.enqueue(
-                conn,
-                channel=m.channel,
-                conversation_id=routed.conversation_id,
-                from_number=m.to.value,
-                to=m.sender.value,
-                recipient_identity_id=routed.sender_identity_id,
-                messages=result.replies,
-            )
-            return
 
     def _apply_status(self, conn: Connection, s: StatusUpdate) -> None:
         o = self.t.outbox
