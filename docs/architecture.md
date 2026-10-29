@@ -55,15 +55,18 @@ language) without touching the others. Postgres is the only infrastructure.
 - Events can arrive **out of order**; order by the message `timestamp`, not arrival time.
 - One Meta app has **one** webhook URL; each messaging account (formerly the WABA) must be
   **subscribed explicitly** to the app. Several endpoints need several apps.
-- **Account model (2026):** Meta split the WABA in two. The **WhatsApp account** holds the
-  phone number, display name, quality rating and messaging limits, and always belongs to the
-  business. A **messaging account** (keeps the old WABA id) holds templates, the payment method
-  and webhook subscriptions, one per solution provider; one number can be served by several
-  messaging accounts at once. Meta picks the messaging account from the app that sends;
-  `messaging_account_id` is needed only when one provider holds several on the same number.
-  New account ids arrive in 2027 and become mandatory in 2028 (as reported; check Meta's docs).
-  Throughput (per number) and messaging limits (per portfolio) are shared by every provider on
-  the number.
+- **Account model (2026)** ([accounts](https://developers.facebook.com/documentation/business-messaging/whatsapp/whatsapp-business-accounts)):
+  a **WhatsApp account** holds one business phone number (Meta's account notice: display name,
+  quality rating and messaging limits are viewed there). A **messaging account** holds templates,
+  billing and webhook subscriptions; the existing WABA id now identifies it, unchanged. Each
+  partner has its own messaging account and one number can carry several. Send with
+  `messaging_account_id` only when the token reaches more than one; otherwise Meta resolves it.
+  WhatsApp account ids come "in a later phase" (no dates in Meta's docs).
+- **Limits** are not per messaging account:
+  [throughput](https://developers.facebook.com/documentation/business-messaging/whatsapp/throughput)
+  is per phone number (80 mps default, inbound and outbound counted), and
+  [messaging limits](https://developers.facebook.com/documentation/business-messaging/whatsapp/messaging-limits)
+  are per business portfolio, shared by all its numbers.
 - Sending is a plain HTTPS call (`POST /{phone-number-id}/messages`) that returns a message id
   (`wamid`); its fate (`sent → delivered → read`, or `failed`) comes back later as webhooks.
 - Per recipient there is a **pair rate limit**: bursts are allowed, then sends to that user are
@@ -133,8 +136,8 @@ Consequences:
 - **Shared numbers**: meydan keys on `phone_number_id` and the portfolio (BSUID scope), never on a
   WABA or messaging account id, so the 2026 account split changes nothing in routing. When
   another provider serves the same number, meydan's one-reply-per-message guarantee holds only
-  inside meydan: which provider answers which conversation is an operator decision (open: how
-  Meta delivers inbound webhooks to several messaging accounts).
+  inside meydan: which provider answers which conversation is an operator decision. Open: Meta's
+  docs don't say how inbound webhooks reach several messaging accounts on one number.
 - **Fan-out / fan-in** for groups: the planner never talks to people directly. It writes one
   proposal per participant into each participant's conversation (outbox), and each personal
   agent turns replies into typed answers the planner aggregates (Scatter-Gather).
