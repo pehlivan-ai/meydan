@@ -15,6 +15,19 @@
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-d98b1f">
 </p>
 
+## Why
+
+You post a plan in the WhatsApp group. Everyone says they'll come. The plan never happens.
+
+Nobody owns the decision, there is no deadline, and when one person drops out the whole thing
+quietly dies. meydan is for agents that fix exactly that: each person has an agent they talk to
+over messaging, and one planner owns the shared decision: it proposes concrete options, closes
+them by a rule, asks before committing anyone, and fills the spot when someone drops out.
+
+Underneath sits the part every WhatsApp agent needs and nobody wants to rebuild: a runtime that
+receives every message once and in order, keeps track of who is who, and makes sure every reply
+arrives. That part is available today; the planner is on the [roadmap](#roadmap).
+
 ## Imagine you live here
 
 <table>
@@ -210,6 +223,47 @@ await runtime.run(stop_event)
    version isn't healthy, the VM rolls back to the previous digest.
 
 Keep migrations backward compatible with the previous release, or rollback can't work.
+
+## Roadmap
+
+The order things are expected to land in, and what each builds on. A module moves into meydan
+once real instances need it; the order may change with what they need.
+
+| Next | What | Builds on |
+|---|---|---|
+| 1 | **Booking**: offering → slot → booking (`proposed → held → confirmed → done / no_show / cancelled`), freed time offered to a waitlist in order | identities, clock |
+| 2 | **Proactive messages**: reminders and offers on a schedule, the 24-hour window with template fallback, consent per purpose | outbox, templates, clock |
+| 3 | **Outcome ledger**: which conversation led to which booking, and who confirmed it | booking, conversations |
+| 4 | **Second channel** (Telegram), **handoff** to a human and back, calendar adapters | channel contract, runtime |
+| 5 | **Relations** between actors (acts for, member of), linking addresses on proof | identity claims |
+| 6 | **Planner**: plan state machine, group consensus, matching, backfill, reliability | 1–5 |
+| 7 | **Agreed ground**: per person and per topic, what the agent may do alone | proactive messages, planner |
+| 8 | **Simulation**: synthetic personas and scenarios to test planning rules before people | booking, planner |
+| 9 | **Peers**: typed agent-to-agent (A2A) messages, between roles and then between instances | relations, planner |
+
+## Tell us
+
+meydan is shaped by the people who use it. If you plan things with groups, or build agents on
+WhatsApp, [open an issue](https://github.com/pehlivan-ai/meydan/issues/new) and tell us:
+
+- which plans fall apart in your groups, and at which step;
+- what you would expect from an agent on WhatsApp, and what it should never do on its own;
+- what was hardest when you set up a WhatsApp agent yourself.
+
+<details>
+<summary>Türkçe</summary>
+
+WhatsApp grubuna bir plan yazıyorsunuz, herkes "gelirim" diyor ama plan bir türlü
+gerçekleşmiyor. meydan bunun için: herkesin mesajla konuştuğu bir kişisel agent'ı, ortak kararı
+ise tek bir planlayıcı üstleniyor. Somut seçenekler sunuyor, kararı bir kurala göre kapatıyor,
+kimseyi sormadan bir şeye bağlamıyor, biri vazgeçince yerini dolduruyor.
+
+Bugün hazır olan kısım, her WhatsApp agent'ının ihtiyaç duyduğu altyapı: her mesajı bir kez ve
+sırasıyla alan, kimin kim olduğunu takip eden ve her cevabın ulaşmasını sağlayan bir runtime.
+Planlayıcı ve agent'lar arası (A2A) mesajlaşma yol haritasında. Fikirlerinizi ve
+deneyimlerinizi [issue](https://github.com/pehlivan-ai/meydan/issues/new) olarak yazın.
+
+</details>
 
 ## Development
 
