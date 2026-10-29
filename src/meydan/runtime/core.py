@@ -31,6 +31,8 @@ from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from meydan.channels.base import Address, Inbound, Outbound, SendError, StatusUpdate
+from meydan.observe.context import TurnContext, turn_scope
+from meydan.observe.record import write_turn
 from meydan.runtime import identity
 from meydan.runtime.presence import Presence
 from meydan.runtime.tables import RuntimeTables
@@ -198,13 +200,14 @@ class Runtime:
         messages: Sequence[Outbound],
         recipient_identity_id: uuid.UUID | None = None,
         start_at: datetime | None = None,
+        turn_id: uuid.UUID | None = None,
     ) -> uuid.UUID | None:
         """Queue one outbound turn (one or more messages), paced like someone typing them.
 
         Returns the turn id. Without `start_at` the turn starts now on the database clock."""
         if not messages:
             return None
-        turn_id = uuid.uuid4()
+        turn_id = turn_id or uuid.uuid4()
         offset = timedelta()
         rows = []
         for seq, m in enumerate(messages):
@@ -354,6 +357,8 @@ class Runtime:
             turn = _turn_from_rows(key, rows)
             ids = [r["id"] for r in rows]
             last = rows[-1]["message_id"]
+            started_at = await asyncio.to_thread(conn.scalar, select(_clock()))
+            ctx = TurnContext(uuid.uuid4(), key, turn.actor_id)
             refresh = None
             if self.presence.typing:
                 await self._read_then_wait(conn, turn, rows)
@@ -362,11 +367,12 @@ class Runtime:
                 if self.presence.typing_refresh_s:
                     refresh = asyncio.create_task(self._keep_typing(turn.to, last, key))
             try:
-                replies = await self.handler(turn)
+                with turn_scope(ctx):
+                    replies = await self.handler(turn)
             except Exception as e:
                 trans.rollback()
                 log.exception("turn failed for %s", key)
-                await asyncio.to_thread(self._record_failure, turn, ids, e)
+                await asyncio.to_thread(self._record_failure, turn, ids, e, ctx, started_at)
                 return 0
             finally:
                 if refresh is not None:
@@ -381,8 +387,19 @@ class Runtime:
                     to=turn.sender.value,
                     recipient_identity_id=turn.sender_identity_id,
                     messages=replies,
+                    turn_id=ctx.turn_id,
                 )
                 self._mark_processed(conn, ids)
+                write_turn(
+                    conn,
+                    self.t,
+                    ctx,
+                    channel=turn.channel,
+                    started_at=started_at,
+                    status="replied",
+                    messages_in=len(ids),
+                    messages_out=len(replies),
+                )
                 trans.commit()
 
             await asyncio.to_thread(commit)
@@ -433,7 +450,14 @@ class Runtime:
         i = self.t.inbox
         conn.execute(update(i).where(i.c.id.in_(ids)).values(processed_at=_clock(), error=error))
 
-    def _record_failure(self, turn: Turn, ids: list, exc: BaseException) -> None:
+    def _record_failure(
+        self,
+        turn: Turn,
+        ids: list,
+        exc: BaseException,
+        ctx: TurnContext,
+        started_at: datetime,
+    ) -> None:
         i = self.t.inbox
         with self.engine.begin() as conn:
             attempts = conn.scalars(
@@ -442,9 +466,12 @@ class Runtime:
                 .values(attempts=i.c.attempts + 1, error=repr(exc)[:500])
                 .returning(i.c.attempts)
             ).all()
-            if attempts and max(attempts) >= self.cfg.max_turn_attempts:
+            gave_up = bool(attempts) and max(attempts) >= self.cfg.max_turn_attempts
+            replies: Sequence[Outbound] = []
+            if gave_up:
                 self._mark_processed(conn, ids, error=f"gave up: {exc!r}"[:500])
                 if self.on_failure:
+                    replies = self.on_failure(turn, exc)
                     self.enqueue(
                         conn,
                         channel=turn.channel,
@@ -452,8 +479,21 @@ class Runtime:
                         from_number=turn.to,
                         to=turn.sender.value,
                         recipient_identity_id=turn.sender_identity_id,
-                        messages=self.on_failure(turn, exc),
+                        messages=replies,
+                        turn_id=ctx.turn_id,
                     )
+            # A failed turn is recorded too: the model calls it made still cost money.
+            write_turn(
+                conn,
+                self.t,
+                ctx,
+                channel=turn.channel,
+                started_at=started_at,
+                status="gave_up" if gave_up else "failed",
+                messages_in=len(ids),
+                messages_out=len(replies),
+                error=repr(exc),
+            )
 
     # --- sender ---------------------------------------------------------------------------
 

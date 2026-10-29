@@ -11,6 +11,8 @@ Two groups (docs/identity.md):
   (append-only evidence that an identity belongs to an actor; the only place who-is-who is decided).
 - **What was said:** conversations with their participants (identities), the inbox and the outbox.
   Messages point to identities, never to actors, so re-linking identities never rewrites history.
+- **What it took:** one row per turn (timing, status, tokens, cost) and one per model call
+  (docs/observe.md), written in the same transaction as the reply.
 """
 
 from dataclasses import dataclass
@@ -23,6 +25,7 @@ from sqlalchemy import (
     Index,
     Integer,
     MetaData,
+    Numeric,
     PrimaryKeyConstraint,
     String,
     Table,
@@ -39,6 +42,8 @@ CLAIM_STATES = ("proposed", "active")
 CLAIM_END_REASONS = ("revoked", "superseded", "dismissed", "expired")
 CONVERSATION_KINDS = ("direct", "thread", "group")
 PARTICIPANT_ROLES = ("self", "peer", "observer")
+TURN_STATUSES = ("replied", "failed", "gave_up")
+COST_SOURCES = ("provider", "estimate", "mixed")
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,8 @@ class RuntimeTables:
     participants: Table
     inbox: Table
     outbox: Table
+    turns: Table
+    usage: Table
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -227,6 +234,53 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         outbox.c.id,
         postgresql_where=outbox.c.status == "pending",
     )
+    turns = Table(
+        f"{prefix}turns",
+        metadata,
+        # The turn's id is also the outbox's turn_id for the reply it produced.
+        Column("id", UUID(as_uuid=True), primary_key=True),
+        Column("conversation_id", UUID(as_uuid=True), ref("conversations"), nullable=False),
+        Column("actor_id", UUID(as_uuid=True), ref("actors")),  # who it was for, as settled then
+        Column("channel", String(20), nullable=False),
+        Column("started_at", DateTime(timezone=True), nullable=False),
+        Column("finished_at", DateTime(timezone=True), nullable=False),
+        Column("status", String(20), nullable=False),
+        Column("error", Text),
+        Column("messages_in", Integer, nullable=False, server_default="0"),
+        Column("messages_out", Integer, nullable=False, server_default="0"),
+        Column("model_calls", Integer, nullable=False, server_default="0"),
+        Column("model", String(120)),  # the last model that answered
+        Column("input_tokens", Integer, nullable=False, server_default="0"),
+        Column("output_tokens", Integer, nullable=False, server_default="0"),
+        Column("cost_usd", Numeric(14, 8)),  # None: no cost known
+        Column("cost_source", String(20)),
+        CheckConstraint(_in("status", TURN_STATUSES), name="status"),
+        CheckConstraint(f"cost_source IS NULL OR {_in('cost_source', COST_SOURCES)}", name="cost"),
+    )
+    Index(f"ix_{prefix}turns_conversation", turns.c.conversation_id, turns.c.started_at)
+    Index(f"ix_{prefix}turns_started", turns.c.started_at)
+
+    usage = Table(
+        f"{prefix}usage",
+        metadata,
+        id_col(),
+        Column("turn_id", UUID(as_uuid=True), ref("turns", ondelete="CASCADE"), nullable=False),
+        now_col("at"),
+        Column("provider", String(60)),
+        Column("model", String(120)),
+        Column("input_tokens", Integer, nullable=False, server_default="0"),
+        Column("output_tokens", Integer, nullable=False, server_default="0"),
+        Column("cache_read_tokens", Integer, nullable=False, server_default="0"),
+        Column("cache_write_tokens", Integer, nullable=False, server_default="0"),
+        Column("reasoning_tokens", Integer, nullable=False, server_default="0"),
+        Column("cost_usd", Numeric(14, 8)),
+        Column("cost_source", String(20)),
+        CheckConstraint(
+            f"cost_source IS NULL OR {_in('cost_source', COST_SOURCES[:2])}", name="cost"
+        ),
+    )
+    Index(f"ix_{prefix}usage_turn", usage.c.turn_id)
+
     return RuntimeTables(
         actors=actors,
         identities=identities,
@@ -235,4 +289,6 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         participants=participants,
         inbox=inbox,
         outbox=outbox,
+        turns=turns,
+        usage=usage,
     )

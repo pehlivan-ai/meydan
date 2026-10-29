@@ -164,7 +164,10 @@ async def test_error_classification(status, code, retryable, min_wait):
 
 
 async def test_bad_config_is_permanent_and_typing_never_raises():
-    c = WhatsAppCloud("")  # empty token: httpx rejects the header before any network call
+    def bad_header(request):  # what httpx raises for a malformed header, with no network involved
+        raise httpx.LocalProtocolError("Illegal header value b'Bearer '")
+
+    c = cloud(bad_header)
     with pytest.raises(SendError) as e:
         await c.send("222", "1", Outbound.text_message("x"))
     assert e.value.retryable is False
