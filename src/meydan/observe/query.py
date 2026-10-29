@@ -1,11 +1,10 @@
 """Read models: what a principal may see of the runtime, shaped for screens and reports.
 
-Every function takes the principal first and enforces its scopes inside the query; there is no
-unscoped variant, so a screen can't forget to filter. Without `conversations:read:all` a
-principal sees only their own conversations. Message text of other people needs
-`messages:read`, and each such read is written to the audit table. Addresses are always masked.
-
-Scopes: `ops` (overview, problems), `conversations:read:all`, `messages:read`, `costs:read`.
+Every function takes the principal first and applies the app's `Visibility` inside the query;
+there is no unscoped variant, so a screen can't forget to filter. Which rows a person sees
+(everyone's conversations or only their own) and which parts of them (message text, addresses,
+agent details, costs) follow the visibility rules; audited items write each read to the audit
+table. The default is `Visibility.need_to_know()`.
 """
 
 import uuid
@@ -18,22 +17,40 @@ from sqlalchemy.dialects.postgresql import distinct_on
 
 from meydan.auth.core import Principal
 from meydan.runtime.tables import RuntimeTables
+from meydan.visibility import Rule, Visibility, mask
+
+NEED_TO_KNOW = Visibility.need_to_know()
 
 
 class NotAllowedError(Exception):
     """The principal lacks a scope this read needs."""
 
 
-def _need(who: Principal, *scopes: str) -> None:
-    if not who.has(*scopes):
-        raise NotAllowedError(", ".join(scopes))
+def _need(who: Principal, rule: Rule) -> None:
+    if not who.has(rule.scope):
+        raise NotAllowedError(rule.scope)
 
 
-def mask(value: str) -> str:
-    """+905321234567 -> +90 5•• ••• •• 67; opaque ids keep only their last 4 characters."""
-    if value.startswith("+") and value[1:].isdigit():
-        return value[:3] + " " + "•" * max(len(value) - 5, 0) + value[-2:]
-    return "…" + value[-4:]
+def _shown(who: Principal, rule: Rule, value: str | None) -> str | None:
+    """The value as this person may see it: in full, masked or hidden (None)."""
+    if value is None or who.has(rule.scope):
+        return value
+    return mask(value) if rule.otherwise == "mask" else None
+
+
+def _audit(
+    conn: Connection,
+    t: RuntimeTables,
+    who: Principal,
+    rule: Rule,
+    action: str,
+    subject_id: uuid.UUID | None = None,
+) -> None:
+    """Record that this person was shown an audited item."""
+    if rule.audit and who.has(rule.scope):
+        conn.execute(
+            insert(t.audit).values(actor_id=who.actor_id, action=action, subject_id=subject_id)
+        )
 
 
 def _clock():
@@ -59,8 +76,15 @@ class Overview(BaseModel):
     dead_letters: int
 
 
-def overview(conn: Connection, t: RuntimeTables, who: Principal, hours: int = 24) -> Overview:
-    _need(who, "ops")
+def overview(
+    conn: Connection,
+    t: RuntimeTables,
+    who: Principal,
+    hours: int = 24,
+    *,
+    visibility: Visibility = NEED_TO_KNOW,
+) -> Overview:
+    _need(who, visibility.operations)
     since = conn.scalar(select(_clock() - timedelta(hours=hours)))
     tu, i, o = t.turns, t.inbox, t.outbox
     seconds = func.extract("epoch", tu.c.finished_at - tu.c.started_at)
@@ -81,7 +105,7 @@ def overview(conn: Connection, t: RuntimeTables, who: Principal, hours: int = 24
     messages_in = conn.scalar(select(func.count()).where(i.c.received_at >= since))
     pending = conn.scalar(select(func.count()).where(o.c.status == "pending"))
     dead = conn.scalar(select(func.count()).where(o.c.status == "dead", o.c.updated_at >= since))
-    cost = row[4]
+    cost = row[4] if visibility.sees(who, "costs") else None
     return Overview(
         since=since,
         turns=row[0],
@@ -107,7 +131,7 @@ class ConversationRow(BaseModel):
     channel: str
     actor_id: uuid.UUID | None
     name: str | None
-    address: str | None  # masked
+    address: str | None  # in full, masked or None, per visibility
     last_at: datetime | None
     messages_in: int
     turns: int
@@ -147,7 +171,12 @@ def _own_conversations(t: RuntimeTables, actor_id: uuid.UUID):
 
 
 def conversations(
-    conn: Connection, t: RuntimeTables, who: Principal, limit: int = 50
+    conn: Connection,
+    t: RuntimeTables,
+    who: Principal,
+    limit: int = 50,
+    *,
+    visibility: Visibility = NEED_TO_KNOW,
 ) -> list[ConversationRow]:
     cv, i, tu = t.conversations, t.inbox, t.turns
     peer = _peer(t)
@@ -169,22 +198,26 @@ def conversations(
         .order_by(text("last_at DESC NULLS LAST"))
         .limit(min(limit, 200))
     )
-    if not who.has("conversations:read:all"):
+    if not visibility.sees(who, "all_conversations"):
         q = q.where(cv.c.id.in_(_own_conversations(t, who.actor_id)))
-    return [
+    costs = visibility.sees(who, "costs")
+    rows = [
         ConversationRow(
             id=r.id,
             channel=r.channel,
             actor_id=r.actor_id,
             name=r.name,
-            address=mask(r.address) if r.address else None,
+            address=_shown(who, visibility.addresses, r.address),
             last_at=r.last_at,
             messages_in=r.messages_in,
             turns=r.turns,
-            cost_usd=r.cost,
+            cost_usd=r.cost if costs else None,
         )
         for r in conn.execute(q)
     ]
+    if rows:
+        _audit(conn, t, who, visibility.addresses, "read:addresses")
+    return rows
 
 
 # --- one conversation ------------------------------------------------------------------------
@@ -219,28 +252,33 @@ class ConversationDetail(BaseModel):
     id: uuid.UUID
     channel: str
     lines: list[Line]
-    turns: list[TurnView]
+    turns: list[TurnView]  # empty when agent details are not visible
     text_redacted: bool
+    details_hidden: bool
 
 
 def conversation(
-    conn: Connection, t: RuntimeTables, who: Principal, conversation_id: uuid.UUID, limit: int = 100
+    conn: Connection,
+    t: RuntimeTables,
+    who: Principal,
+    conversation_id: uuid.UUID,
+    limit: int = 100,
+    *,
+    visibility: Visibility = NEED_TO_KNOW,
 ) -> ConversationDetail | None:
     cv, i, o, tu = t.conversations, t.inbox, t.outbox, t.turns
     mine = _own_conversations(t, who.actor_id).subquery()
     own = bool(conn.scalar(select(func.count()).where(mine.c.conversation_id == conversation_id)))
-    if not own and not who.has("conversations:read:all"):
+    if not own and not visibility.sees(who, "all_conversations"):
         return None  # not found, as far as they can tell
     head = conn.execute(select(cv.c.id, cv.c.channel).where(cv.c.id == conversation_id)).first()
     if head is None:
         return None
-    show_text = own or who.has("messages:read")
-    if show_text and not own:
-        conn.execute(
-            insert(t.audit).values(
-                actor_id=who.actor_id, action="read:messages", subject_id=conversation_id
-            )
-        )
+    show_text = own or visibility.sees(who, "message_text")
+    if not own:
+        _audit(conn, t, who, visibility.message_text, "read:messages", conversation_id)
+    show_details = visibility.sees(who, "agent_details")
+    show_costs = visibility.sees(who, "costs")
 
     ins = conn.execute(
         select(i.c.received_at, i.c.text, i.c.processed_at)
@@ -274,18 +312,25 @@ def conversation(
         i.c.conversation_id == tu.c.conversation_id,
         i.c.processed_at.between(tu.c.started_at, tu.c.finished_at + timedelta(seconds=5)),
     )
-    turns = conn.execute(
-        select(
-            tu,
-            select(func.min(i.c.received_at)).where(answered).scalar_subquery().label("received"),
-            select(func.min(i.c.read_at)).where(answered).scalar_subquery().label("read"),
-            select(func.min(i.c.typing_at)).where(answered).scalar_subquery().label("typing"),
-            first_sent.label("first_sent"),
-        )
-        .where(tu.c.conversation_id == conversation_id)
-        .order_by(tu.c.started_at.desc())
-        .limit(limit)
-    ).all()
+    turns = (
+        []
+        if not show_details
+        else conn.execute(
+            select(
+                tu,
+                select(func.min(i.c.received_at))
+                .where(answered)
+                .scalar_subquery()
+                .label("received"),
+                select(func.min(i.c.read_at)).where(answered).scalar_subquery().label("read"),
+                select(func.min(i.c.typing_at)).where(answered).scalar_subquery().label("typing"),
+                first_sent.label("first_sent"),
+            )
+            .where(tu.c.conversation_id == conversation_id)
+            .order_by(tu.c.started_at.desc())
+            .limit(limit)
+        ).all()
+    )
     return ConversationDetail(
         id=head.id,
         channel=head.channel,
@@ -304,13 +349,14 @@ def conversation(
                 model_calls=r.model_calls,
                 input_tokens=r.input_tokens,
                 output_tokens=r.output_tokens,
-                cost_usd=r.cost_usd,
-                cost_source=r.cost_source,
+                cost_usd=r.cost_usd if show_costs else None,
+                cost_source=r.cost_source if show_costs else None,
                 error=r.error,
             )
             for r in reversed(turns)
         ],
         text_redacted=not show_text,
+        details_hidden=not show_details,
     )
 
 
@@ -337,8 +383,15 @@ class CostReport(BaseModel):
     total_usd: Decimal | None
 
 
-def costs(conn: Connection, t: RuntimeTables, who: Principal, days: int = 30) -> CostReport:
-    _need(who, "costs:read")
+def costs(
+    conn: Connection,
+    t: RuntimeTables,
+    who: Principal,
+    days: int = 30,
+    *,
+    visibility: Visibility = NEED_TO_KNOW,
+) -> CostReport:
+    _need(who, visibility.costs)
     tu, u = t.turns, t.usage
     since = conn.scalar(select(_clock() - timedelta(days=days)))
     day = func.date_trunc("day", tu.c.started_at).label("day")
@@ -388,9 +441,15 @@ class Problem(BaseModel):
 
 
 def problems(
-    conn: Connection, t: RuntimeTables, who: Principal, hours: int = 72, limit: int = 100
+    conn: Connection,
+    t: RuntimeTables,
+    who: Principal,
+    hours: int = 72,
+    limit: int = 100,
+    *,
+    visibility: Visibility = NEED_TO_KNOW,
 ) -> list[Problem]:
-    _need(who, "ops")
+    _need(who, visibility.operations)
     tu, o = t.turns, t.outbox
     since = conn.scalar(select(_clock() - timedelta(hours=hours)))
     failed = conn.execute(

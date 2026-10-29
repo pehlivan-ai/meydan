@@ -1,6 +1,6 @@
 """HTTP surface for the read models (extra `api`): mount next to meydan.auth.web.
 
-    app.include_router(observe_routes(auth), prefix="/observe")
+    app.include_router(observe_routes(auth, Visibility.trusted("ops")), prefix="/observe")
 
 Every endpoint needs a signed-in principal; scopes are enforced by the read models themselves
 (403), and a conversation you may not see is a 404, like one that doesn't exist.
@@ -15,6 +15,7 @@ from meydan.auth.core import Principal
 from meydan.auth.web import Auth
 from meydan.observe import query
 from meydan.observe.query import (
+    NEED_TO_KNOW,
     ConversationDetail,
     ConversationRow,
     CostReport,
@@ -22,16 +23,18 @@ from meydan.observe.query import (
     Overview,
     Problem,
 )
+from meydan.visibility import Visibility
 
 
-def routes(auth: Auth) -> APIRouter:
+def routes(auth: Auth, visibility: Visibility = NEED_TO_KNOW) -> APIRouter:
+    """The read models over HTTP, showing what `visibility` allows each person."""
     router = APIRouter(tags=["observe"])
     signed_in = Annotated[Principal, Depends(auth.signed_in)]
 
     def read(fn, *args, **kwargs):
         try:
             with auth.engine.begin() as conn:
-                return fn(conn, auth.t, *args, **kwargs)
+                return fn(conn, auth.t, *args, visibility=visibility, **kwargs)
         except NotAllowedError as e:
             raise HTTPException(status.HTTP_403_FORBIDDEN, "Not allowed.") from e
 

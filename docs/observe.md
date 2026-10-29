@@ -37,23 +37,24 @@ A turn's `cost_source` is `provider`, `estimate` or `mixed`, so a report can say
 is exact.
 
 ## Reading it (since v0.5.0)
-Read models in `meydan.observe.query`, each taking the **principal first** and enforcing its
-scopes inside the query (there is no unscoped variant):
+Read models in `meydan.observe.query`, each taking the **principal first** and applying your
+`Visibility` inside the query (there is no unscoped variant; [visibility.md](visibility.md)).
+Item names below; the default preset `need_to_know()` maps them to the scopes in brackets:
 
-| Read model | Returns | Needs |
+| Read model | Returns | Visibility items |
 |---|---|---|
-| `overview` | turns (replied/failed/gave up), cost and its exact share, average/slowest turn, active conversations, pending sends, dead letters | `ops` |
-| `conversations` | most recent first: who (address masked), channel, messages, turns, cost | `conversations:read:all`, else only your own |
-| `conversation` | transcript + each turn's timeline (received → seen → typing → sent), model, tokens, cost | others' message text needs `messages:read` (else redacted); each such read is written to `meydan_audit` |
-| `costs` | per day and per model | `costs:read` |
-| `problems` | failed turns and dead letters with their errors | `ops` |
+| `overview` | turns (replied/failed/gave up), cost and its exact share, average/slowest turn, active conversations, pending sends, dead letters | `operations` (`ops`); cost needs `costs` |
+| `conversations` | most recent first: who, address, channel, messages, turns, cost | `all_conversations` (else only your own), `addresses` (else masked), `costs` |
+| `conversation` | transcript + each turn's timeline (received → seen → typing → sent), model, tokens, cost | `message_text` (others' text, audited), `agent_details` (the turns), `costs` |
+| `costs` | per day and per model | `costs` (`costs:read`) |
+| `problems` | failed turns and dead letters with their errors | `operations` (`ops`) |
 
 HTTP (extra `api`), next to `meydan.auth.web`:
 
 ```python
 from meydan.observe.web import routes as observe_routes
 
-app.include_router(observe_routes(auth), prefix="/observe")  # 401 / 403 / 404 as appropriate
+app.include_router(observe_routes(auth, visibility), prefix="/observe")  # 401 / 403 / 404
 ```
 
 ## Not here (yet)
