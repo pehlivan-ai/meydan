@@ -36,7 +36,26 @@ Per model call, in USD:
 A turn's `cost_source` is `provider`, `estimate` or `mixed`, so a report can say how much of a total
 is exact.
 
+## Reading it (since v0.5.0)
+Read models in `meydan.observe.query`, each taking the **principal first** and enforcing its
+scopes inside the query (there is no unscoped variant):
+
+| Read model | Returns | Needs |
+|---|---|---|
+| `overview` | turns (replied/failed/gave up), cost and its exact share, average/slowest turn, active conversations, pending sends, dead letters | `ops` |
+| `conversations` | most recent first: who (address masked), channel, messages, turns, cost | `conversations:read:all`, else only your own |
+| `conversation` | transcript + each turn's timeline (received → seen → typing → sent), model, tokens, cost | others' message text needs `messages:read` (else redacted); each such read is written to `meydan_audit` |
+| `costs` | per day and per model | `costs:read` |
+| `problems` | failed turns and dead letters with their errors | `ops` |
+
+HTTP (extra `api`), next to `meydan.auth.web`:
+
+```python
+from meydan.observe.web import routes as observe_routes
+
+app.include_router(observe_routes(auth), prefix="/observe")  # 401 / 403 / 404 as appropriate
+```
+
 ## Not here (yet)
-- Reading it: principal-scoped read models and HTTP endpoints (planned).
 - Deep traces (spans per model call and tool call): an optional OpenTelemetry export (planned).
-- Message text never goes into these tables; it stays in the inbox/outbox.
+- Message text never goes into the observe tables; it stays in the inbox/outbox.

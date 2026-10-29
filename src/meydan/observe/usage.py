@@ -9,7 +9,7 @@ rows itself and pass them to `record_usage`.
 """
 
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 from decimal import Decimal
 from typing import Any
 
@@ -20,6 +20,7 @@ from meydan.observe.context import record_usage
 class Usage:
     provider: str | None
     model: str | None
+    _: KW_ONLY  # numbers by name only: a cost can't slip into a token count
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0

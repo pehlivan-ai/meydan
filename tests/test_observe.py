@@ -61,7 +61,7 @@ def test_cost_prefers_the_provider_then_the_estimate():
 
 def test_recording_outside_a_turn_does_nothing():
     assert current_turn() is None
-    record_usage(Usage("p", "m", 1, 1))  # no error, nothing to attach to
+    record_usage(Usage("p", "m", input_tokens=1, output_tokens=1))  # no error, nothing to attach to
 
 
 async def test_turn_record_carries_timing_tokens_and_cost(db):
@@ -92,7 +92,8 @@ async def test_turn_record_carries_timing_tokens_and_cost(db):
 async def test_failed_turns_are_recorded_with_their_cost(db):
     async def broken(turn):
         cost = Decimal("0.0001")
-        record_usage(Usage("openrouter", "m", 50, 0, cost_usd=cost, cost_source="provider"))
+        used = Usage("openrouter", "m", input_tokens=50, cost_usd=cost, cost_source="provider")
+        record_usage(used)
         raise RuntimeError("model down")
 
     rt = runtime(db, broken, FakeChannel(), max_turn_attempts=2)

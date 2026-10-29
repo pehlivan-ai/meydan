@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.4.0-1a9e8f">
+  <img alt="version" src="https://img.shields.io/badge/version-v0.5.0-1a9e8f">
   <img alt="python" src="https://img.shields.io/badge/python-3.12%2B-3776ab">
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-d98b1f">
 </p>
@@ -83,7 +83,7 @@ groups, agreeing on a time and place, filling a spot when someone drops out.
 Each deployment is an **instance**: one community, its own data, its own VM. Instances are
 designed to become peers in a network later (agent-to-agent, A2A-shaped messages).
 
-> Status: early (v0.4.0). Only the pieces marked *available* below exist today. The rest is the
+> Status: early (v0.5.0). Only the pieces marked *available* below exist today. The rest is the
 > plan, documented in [docs/architecture.md](docs/architecture.md).
 
 **New in v0.2:** the channel and the runtime. meydan can now hold real WhatsApp
@@ -107,6 +107,13 @@ starts, refreshed while a slow reply is still being made; one setting (`presence
 **v0.4.0:** observe. Every turn leaves a record (timing, status, tokens and what it cost, exact where
 the provider reports it), written with the reply; one line in your agent reports model usage
 ([docs/observe.md](docs/observe.md)).
+
+**v0.5.0:** sign-in and read access. People sign in by sending a short code from the address meydan
+already knows (no passwords, no templates); sessions and scopes are deny-by-default and stored only
+as hashes ([docs/auth.md](docs/auth.md)). Principal-scoped read models (overview, conversations,
+transcripts with each turn's timeline, costs, problems) with an HTTP surface; others' message text
+is redacted unless allowed, and such reads are audited. New: interceptors (messages handled before
+the agent).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/flow-dark.svg">
@@ -155,7 +162,7 @@ the provider reports it), written with the reply; one line in your agent reports
 meydan is consumed as a pinned git dependency:
 
 ```
-uv add "meydan[llm,runtime] @ git+https://github.com/pehlivan-ai/meydan@v0.4.0"
+uv add "meydan[llm,runtime,api] @ git+https://github.com/pehlivan-ai/meydan@v0.5.0"
 ```
 
 For working on meydan and an instance at the same time, clone it next to the instance and point

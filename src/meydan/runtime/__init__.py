@@ -8,6 +8,8 @@ Needs the `runtime` extra: `meydan[runtime]`.
 from meydan.runtime.core import (
     Channel,
     Handler,
+    Intercepted,
+    Interceptor,
     Runtime,
     RuntimeConfig,
     Said,
@@ -21,6 +23,8 @@ from meydan.runtime.tables import RuntimeTables, define_tables
 __all__ = [
     "Channel",
     "Handler",
+    "Intercepted",
+    "Interceptor",
     "Presence",
     "Routed",
     "Runtime",
