@@ -161,18 +161,126 @@ inside their queries ([docs/visibility.md](docs/visibility.md)).
 | `templates/instance` | Docker Compose stack (Postgres 18, app, Caddy), CI/CD workflow, digest-pinned deploy with health check and rollback, one-time GCP setup | available |
 | `meydan.runtime` | Inbox (idempotent on message id) → identities (actors, addresses, evidence-based claims; [docs/identity.md](docs/identity.md)) → worker, one turn per conversation at a time (advisory lock, debounce, resequencing, poison-message guard) → transactional outbox → sender (per-conversation order, bubble pacing, jittered retries, dead letter, receipt correlation). Postgres 18 | available (`meydan[runtime]`) |
 | `meydan.channels.whatsapp` | WhatsApp Cloud API: signature check, webhook parsing (text, buttons, interactive, receipts) routed by `phone_number_id`, sending text/templates from the number written to, typing indicator, retryable vs permanent errors | available (`meydan[runtime]`) |
+| `meydan.observe` | One record per turn and per model call (timing, tokens, cost), written with the reply; read models (overview, conversations, transcripts, costs, problems) with an HTTP surface ([docs/observe.md](docs/observe.md)) | available (`meydan[api]` for HTTP) |
+| `meydan.auth` | Sign in by sending a code from an address meydan knows; sessions and scopes, hashed, deny by default ([docs/auth.md](docs/auth.md)) | available (`meydan[api]`) |
+| `meydan.access` | Roles in your OpenFGA model file, assignments as rows in your database, mirrored through an outbox ([docs/access.md](docs/access.md)) | available (`meydan[access]`) |
+| `meydan.visibility` | What a signed-in person sees: two presets, then per item; applied inside the read models ([docs/visibility.md](docs/visibility.md)) | available |
 | planning | Plan state machine, group consensus rules, matching, waitlist/backfill, reliability, consent | planned |
 | peers | Typed agent-to-agent messages between roles and, later, between instances | planned |
 | simulation | Synthetic personas and scenarios to evaluate agents before they meet people | planned |
 
 </details>
 
+## Quick start
+
+meydan gives you parts, not a finished app. You write what only your app knows; meydan handles
+what every messaging agent needs. You wire the parts together in one place in your app.
+
+### 1. Add meydan's tables to yours
+
+```python
+from meydan.runtime import define_tables
+
+runtime_tables = define_tables(Base.metadata)  # meydan_* tables, migrated by your Alembic
+```
+
+Your domain (members, spaces, events, bookings) lives next to them in the same Postgres. A
+message and the reply it causes are written in the same transactions as your own data.
+
+### 2. Write what your agent says
+
+```python
+async def reply(turn: Turn) -> list[Outbound]:
+    # turn.actor_id is who wrote, whichever address they used. Key your data on it.
+    return [Outbound.text_message(f"got: {turn.text}")]
+```
+
+Tools follow the `meydan.tools` contract: the person comes from the channel, never from the model.
+
+### 3. Wire the parts in your app
+
+Your app builds the parts once, where it starts, and passes them to whoever needs them:
+
+```python
+# yourapp/compose.py
+def compose(settings: Settings) -> Parts:
+    engine = create_engine(settings.database_url)
+    runtime = Runtime(engine, runtime_tables, WhatsAppCloud(settings.whatsapp_token), reply)
+    access = Access(
+        engine,
+        runtime_tables,
+        AccessConfig(api_url=settings.openfga_url, model="access.json", instance="instance:main"),
+    )
+    return Parts(engine, runtime, access)
+
+
+# yourapp/main.py
+def create_app(settings: Settings | None = None) -> FastAPI:
+    parts = compose(settings or Settings())
+    app = FastAPI(lifespan=...)  # starts parts.runtime.run(stop) next to the API
+    app.include_router(webhook_routes(parts.runtime))
+    return app
+```
+
+meydan has no app object, no registry and no global settings. Nothing connects anywhere because a
+module was imported, so tests call `compose` with test settings and fakes, and two apps can use
+meydan side by side.
+
+### 4. Run it
+
+```
+uvicorn --factory yourapp.main:create_app
+```
+
+WhatsApp messages now arrive through your webhook, your `reply` answers them, and meydan delivers
+the answer. An admin service is a second FastAPI app built the same way, with `meydan.auth`,
+`meydan.access` and the `meydan.observe` read models.
+
+### What you write, what meydan handles
+
+| You write | meydan handles |
+|---|---|
+| your tables and business rules | every message once, in order; who wrote (actors, identities) |
+| your agent: prompt and tools | one turn per conversation at a time; replies paced, retried, delivered and read |
+| your access model (`access.fga`) | sign-in by a code sent from WhatsApp; sessions; role checks through OpenFGA |
+| one visibility choice (`Visibility.trusted("ops")`) | what each person sees of conversations, texts, numbers and costs; audited reads |
+| your screens, if you have any | read models with an HTTP surface: overview, conversations, costs, problems |
+
+### How the parts connect
+
+```
+WhatsApp ─▶ your webhook ─▶ runtime.receive ─▶ inbox            (stored first, answered 200)
+                                  │
+                                  ▼
+                      who wrote? (actor, identities)
+                                  │
+                                  ▼
+            worker: one turn per conversation ─▶ your reply(turn) ─▶ outbox ─▶ sender ─▶ WhatsApp
+                                  │                    │
+                                  ▼                    ▼
+                       observe: turn record     your tools: your tables
+
+Browser ─▶ auth (session) ─▶ access (roles → scopes) ─▶ visibility ─▶ read models ─▶ Postgres
+```
+
+### Next steps
+
+- Who is who: [docs/identity.md](docs/identity.md)
+- Seen and typing: [docs/presence.md](docs/presence.md)
+- Turn records and costs: [docs/observe.md](docs/observe.md)
+- Sign-in: [docs/auth.md](docs/auth.md)
+- Roles: [docs/access.md](docs/access.md)
+- What people see: [docs/visibility.md](docs/visibility.md)
+
+A pattern moves into meydan when several real apps need it. Until then, a few clear lines in your
+app beat a framework that guesses your shape.
+
 ## Install
 
 meydan is consumed as a pinned git dependency:
 
 ```
-uv add "meydan[llm,runtime,api,access] @ git+https://github.com/pehlivan-ai/meydan@v0.6.1"
+uv add "meydan[llm,runtime,api,access] @ git+https://github.com/pehlivan-ai/meydan@v0.7.0"
 ```
 
 For working on meydan and an instance at the same time, clone it next to the instance and point
@@ -206,31 +314,6 @@ model = llm.get_model()  # hand this to a Pydantic AI Agent
 ```
 
 `LLMSettings` also reads `MEYDAN_LLM_*` environment variables (and `OPENROUTER_API_KEY`).
-
-## Runtime in an instance
-
-```python
-from meydan.channels.whatsapp import WhatsAppCloud, parse_messages, parse_statuses, verify_signature
-from meydan.channels.base import Outbound
-from meydan.runtime import Runtime, Turn, define_tables
-
-runtime_tables = define_tables(Base.metadata)  # your Alembic migrates the meydan_* tables
-
-
-async def reply(turn: Turn) -> list[Outbound]:  # your personal agent
-    # turn.actor_id: who wrote, whichever address they used; key your domain data on it.
-    return [Outbound.text_message(f"got: {turn.text}")]
-
-
-runtime = Runtime(engine, runtime_tables, WhatsAppCloud(access_token), reply)
-
-# webhook: verify, then store in the request's transaction and answer 200 right away
-with engine.begin() as conn:
-    runtime.receive(conn, parse_messages(payload), parse_statuses(payload))
-
-# background (e.g. FastAPI lifespan): worker + sender loops
-await runtime.run(stop_event)
-```
 
 ## Setting up an instance
 
