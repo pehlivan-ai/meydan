@@ -1,6 +1,6 @@
 [project]
 name = "meydan"
-version = "0.5.0"
+version = "0.6.0"
 description = "Primitives for running instances of personal and planning agents that coordinate people, one-to-one and in groups."
 readme = "README.md"
 license = "Apache-2.0"
@@ -29,6 +29,9 @@ llm = [
     "tenacity>=9",
     "openai>=1.80",
     "pydantic-ai-slim[google,openrouter]>=2.61",
+]
+access = [
+    "openfga-sdk>=0.10.5",
 ]
 
 [project.urls]

@@ -14,6 +14,7 @@ there is nothing to probe.
 import hashlib
 import secrets
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
 
@@ -108,7 +109,22 @@ def revoke(conn: Connection, t: RuntimeTables, actor_id: uuid.UUID, scope: str) 
     )
 
 
-def confirm_from_message(conn: Connection, t: RuntimeTables, text: str, routed: Routed) -> bool:
+# Who may confirm a sign-in for an audience. Default: holding the audience as a scope; with
+# meydan.access: holding a platform role (meydan.access.may_sign_in).
+SignInRule = Callable[[Connection, uuid.UUID, str], bool]
+
+
+def _holds_scope(t: RuntimeTables) -> SignInRule:
+    return lambda conn, actor_id, audience: audience in scopes_of(conn, t, actor_id)
+
+
+def confirm_from_message(
+    conn: Connection,
+    t: RuntimeTables,
+    text: str,
+    routed: Routed,
+    allowed: SignInRule | None = None,
+) -> bool:
     """Confirm a pending sign-in if `text` is its code and the sender may sign in there."""
     s = t.sign_ins
     row = conn.execute(
@@ -120,7 +136,8 @@ def confirm_from_message(conn: Connection, t: RuntimeTables, text: str, routed: 
         )
         .with_for_update()
     ).first()
-    if row is None or row.audience not in scopes_of(conn, t, routed.actor_id):
+    rule = allowed or _holds_scope(t)
+    if row is None or not rule(conn, routed.actor_id, row.audience):
         return False
     conn.execute(
         update(s)
@@ -132,12 +149,16 @@ def confirm_from_message(conn: Connection, t: RuntimeTables, text: str, routed: 
     return True
 
 
-def sign_in_interceptor(t: RuntimeTables, confirmed_reply: str | None = None):
+def sign_in_interceptor(
+    t: RuntimeTables, confirmed_reply: str | None = None, allowed: SignInRule | None = None
+):
     """For `Runtime(intercept=[...])`: catches sign-in codes so they never reach the agent."""
 
     def intercept(conn: Connection, message: Inbound, routed: Routed) -> Intercepted | None:
         text = message.text.strip()
-        if not text or len(text) > 40 or not confirm_from_message(conn, t, text, routed):
+        if not text or len(text) > 40:
+            return None
+        if not confirm_from_message(conn, t, text, routed, allowed):
             return None
         reply = (Outbound.text_message(confirmed_reply),) if confirmed_reply else ()
         return Intercepted(reply)

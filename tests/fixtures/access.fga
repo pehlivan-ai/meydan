@@ -1,0 +1,25 @@
+model
+  schema 1.1
+
+type actor
+
+type instance
+  relations
+    define owner: [actor]
+    define admin: [actor] or owner
+    define can_operate: admin
+    define can_read_costs: admin
+
+type space
+  relations
+    define instance: [instance]
+    define manager: [actor] or admin from instance
+    define member: [actor] or manager
+    define can_edit: manager
+    define can_view: member
+
+type event
+  relations
+    define space: [space]
+    define host: [actor]
+    define can_edit: host or manager from space

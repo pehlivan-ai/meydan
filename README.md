@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <img alt="version" src="https://img.shields.io/badge/version-v0.5.0-1a9e8f">
+  <img alt="version" src="https://img.shields.io/badge/version-v0.6.0-1a9e8f">
   <img alt="python" src="https://img.shields.io/badge/python-3.12%2B-3776ab">
   <img alt="license" src="https://img.shields.io/badge/license-Apache--2.0-d98b1f">
 </p>
@@ -83,7 +83,7 @@ groups, agreeing on a time and place, filling a spot when someone drops out.
 Each deployment is an **instance**: one community, its own data, its own VM. Instances are
 designed to become peers in a network later (agent-to-agent, A2A-shaped messages).
 
-> Status: early (v0.5.0). Only the pieces marked *available* below exist today. The rest is the
+> Status: early (v0.6.0). Only the pieces marked *available* below exist today. The rest is the
 > plan, documented in [docs/architecture.md](docs/architecture.md).
 
 **New in v0.2:** the channel and the runtime. meydan can now hold real WhatsApp
@@ -114,6 +114,11 @@ as hashes ([docs/auth.md](docs/auth.md)). Principal-scoped read models (overview
 transcripts with each turn's timeline, costs, problems) with an HTTP surface; others' message text
 is redacted unless allowed, and such reads are audited. New: interceptors (messages handled before
 the agent).
+
+**v0.6.0:** access. Who may do what, on what, with OpenFGA (Apache-2.0) as the engine: roles live in
+your model file, assignments are rows in your database mirrored to OpenFGA through an outbox, and
+relations already in your data are passed with each question instead of being copied
+([docs/access.md](docs/access.md)).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/flow-dark.svg">
@@ -162,7 +167,7 @@ the agent).
 meydan is consumed as a pinned git dependency:
 
 ```
-uv add "meydan[llm,runtime,api] @ git+https://github.com/pehlivan-ai/meydan@v0.5.0"
+uv add "meydan[llm,runtime,api,access] @ git+https://github.com/pehlivan-ai/meydan@v0.6.0"
 ```
 
 For working on meydan and an instance at the same time, clone it next to the instance and point

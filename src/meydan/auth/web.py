@@ -15,11 +15,14 @@ Requests that change something and authenticate with the cookie must come from t
 (the CSRF guard); bearer requests are not exposed to CSRF.
 """
 
-from collections.abc import Callable
+import dataclasses
+import uuid
+from collections.abc import Awaitable, Callable
 from typing import Annotated
 from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi.concurrency import run_in_threadpool
 from fastapi.security import APIKeyCookie, HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
 from sqlalchemy import Engine
@@ -52,6 +55,8 @@ class Auth:
         cookie_name: str = "meydan_session",
         secure_cookies: bool = True,  # False only for local development over plain http
         trusted_origins: tuple[str, ...] = (),  # extra origins allowed to send cookie requests
+        # Extra scopes per request, e.g. meydan.access.Access.scopes (roles -> scopes).
+        resolve_scopes: Callable[[uuid.UUID], Awaitable[frozenset[str]]] | None = None,
     ):
         self.engine = engine
         self.t = tables
@@ -60,6 +65,7 @@ class Auth:
         self.cookie_name = cookie_name
         self.secure = secure_cookies
         self.trusted_origins = trusted_origins
+        self.resolve_scopes = resolve_scopes
         self._cookie = APIKeyCookie(name=cookie_name, auto_error=False)
         self._bearer = HTTPBearer(auto_error=False)
         self.signed_in = self._signed_in_dependency()
@@ -111,7 +117,7 @@ class Auth:
     # --- dependencies ---------------------------------------------------------------------
 
     def _signed_in_dependency(self):
-        def signed_in(
+        async def signed_in(
             request: Request,
             cookie: Annotated[str | None, Depends(self._cookie)] = None,
             bearer: Annotated[HTTPAuthorizationCredentials | None, Depends(self._bearer)] = None,
@@ -122,10 +128,12 @@ class Auth:
                 raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sign in first.")
             if bearer is None and request.method not in SAFE_METHODS:
                 self._same_origin_or_403(request)
-            with self.engine.begin() as conn:
-                found = core.principal(conn, self.t, token, self.cfg.audience)
+            found = await run_in_threadpool(self._principal, token)
             if found is None:
                 raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Sign in first.")
+            if self.resolve_scopes is not None:
+                extra = await self.resolve_scopes(found.actor_id)
+                found = dataclasses.replace(found, scopes=found.scopes | extra)
             return found
 
         return signed_in
@@ -142,6 +150,10 @@ class Auth:
         return require
 
     # --- helpers --------------------------------------------------------------------------
+
+    def _principal(self, token: str) -> Principal | None:
+        with self.engine.begin() as conn:
+            return core.principal(conn, self.t, token, self.cfg.audience)
 
     def _token(self, request: Request) -> str | None:
         header = request.headers.get("authorization", "")

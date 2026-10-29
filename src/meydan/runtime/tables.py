@@ -14,7 +14,9 @@ Two groups (docs/identity.md):
 - **What it took:** one row per turn (timing, status, tokens, cost) and one per model call
   (docs/observe.md), written in the same transaction as the reply.
 - **Who may use the app:** sign-ins (proof of control through a channel), sessions and grants
-  (scopes per actor) (docs/auth.md). Secrets are stored only as hashes.
+  (docs/auth.md). Secrets are stored only as hashes. A grant is a scope, or a role on an object
+  (e.g. `manager` on `club:42`); roles are evaluated by OpenFGA, kept in sync through an outbox
+  (docs/access.md).
 """
 
 from dataclasses import dataclass
@@ -63,6 +65,8 @@ class RuntimeTables:
     sessions: Table
     grants: Table
     audit: Table
+    access_outbox: Table
+    access_state: Table
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -322,7 +326,8 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         metadata,
         id_col(),
         Column("actor_id", UUID(as_uuid=True), ref("actors"), nullable=False),
-        Column("scope", String(80), nullable=False),  # e.g. "ops", "costs:read"
+        Column("scope", String(80), nullable=False),  # a scope ("ops") or a role ("manager")
+        Column("object", String(255)),  # the role's object, e.g. "club:42"; None for a scope
         Column("granted_by", UUID(as_uuid=True), ref("actors")),  # None: granted by an operator CLI
         now_col("created_at"),
         Column("revoked_at", DateTime(timezone=True)),
@@ -331,6 +336,7 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         f"uq_{prefix}grants_open",
         grants.c.actor_id,
         grants.c.scope,
+        func.coalesce(grants.c.object, ""),
         unique=True,
         postgresql_where=grants.c.revoked_at.is_(None),
     )
@@ -347,6 +353,36 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
     )
     Index(f"ix_{prefix}audit_actor", audit.c.actor_id, audit.c.at)
 
+    # Role assignments waiting to be mirrored to OpenFGA (written with the grant, synced after).
+    access_outbox = Table(
+        f"{prefix}access_outbox",
+        metadata,
+        id_col(),
+        Column("op", String(10), nullable=False),  # "write" | "delete"
+        Column("user", String(255), nullable=False),  # e.g. "actor:<uuid>"
+        Column("relation", String(80), nullable=False),
+        Column("object", String(255), nullable=False),
+        now_col("created_at"),
+        Column("synced_at", DateTime(timezone=True)),
+        Column("attempts", Integer, nullable=False, server_default="0"),
+        Column("last_error", Text),
+        CheckConstraint(_in("op", ("write", "delete")), name="op"),
+    )
+    Index(
+        f"ix_{prefix}access_outbox_pending",
+        access_outbox.c.id,
+        postgresql_where=access_outbox.c.synced_at.is_(None),
+    )
+
+    # Which OpenFGA store and model this instance uses (and the model's hash, to rewrite on change).
+    access_state = Table(
+        f"{prefix}access_state",
+        metadata,
+        Column("key", String(40), primary_key=True),
+        Column("value", String(255), nullable=False),
+        now_col("updated_at"),
+    )
+
     return RuntimeTables(
         actors=actors,
         identities=identities,
@@ -361,4 +397,6 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         sessions=sessions,
         grants=grants,
         audit=audit,
+        access_outbox=access_outbox,
+        access_state=access_state,
     )
