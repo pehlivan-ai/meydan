@@ -86,49 +86,8 @@ designed to become peers in a network later (agent-to-agent, A2A-shaped messages
 > Status: early (v0.8.0). Only the pieces marked *available* below exist today. The rest is the
 > plan, documented in [docs/architecture.md](docs/architecture.md).
 
-**New in v0.2:** the channel and the runtime. meydan can now hold real WhatsApp
-conversations, and you only write what the agent says back, `reply(turn)`.
-
-**v0.2.1:** if the "typing…" indicator fails, the reply still goes out; errors that retrying
-can't fix (a wrong token, a malformed request) are marked permanent right away.
-
-**New in v0.3:** who is who. People, agents and organizations are **actors**; their addresses
-(phone numbers, WhatsApp business-scoped user ids, email later) are **identities**, linked only
-on evidence through append-only **claims** ([docs/identity.md](docs/identity.md)). A
-conversation has its own id, so it survives a person hiding or sharing their number; replies
-are one **turn** of one or more messages; `transcript()` reads a conversation on one clock.
-Upgrading a v0.2 instance changes the tables: backfill old rows with
-`meydan.runtime.identity.route` (one rule for old and new messages).
-
-**v0.3.1:** presence. "Seen" about a second after a message arrives, then "typing…" when the reply
-starts, refreshed while a slow reply is still being made; one setting (`presence="human" |
-"instant" | "quiet"` or numbers), and a measurable timeline per turn ([docs/presence.md](docs/presence.md)).
-
-**v0.4.0:** observe. Every turn leaves a record (timing, status, tokens and what it cost, exact where
-the provider reports it), written with the reply; one line in your agent reports model usage
-([docs/observe.md](docs/observe.md)).
-
-**v0.5.0:** sign-in and read access. People sign in by sending a short code from the address meydan
-already knows (no passwords, no templates); sessions and scopes are deny-by-default and stored only
-as hashes ([docs/auth.md](docs/auth.md)). Principal-scoped read models (overview, conversations,
-transcripts with each turn's timeline, costs, problems) with an HTTP surface; others' message text
-is redacted unless allowed, and such reads are audited. New: interceptors (messages handled before
-the agent).
-
-**v0.6.0:** access. Who may do what, on what, with OpenFGA (Apache-2.0) as the engine: roles live in
-your model file, assignments are rows in your database mirrored to OpenFGA through an outbox, and
-relations already in your data are passed with each question instead of being copied
-([docs/access.md](docs/access.md)).
-
-**v0.7.0:** visibility. What a signed-in person sees (message text, addresses, agent details, costs,
-everyone's conversations or only their own), chosen in one place: `Visibility.need_to_know()` (the
-default) or `Visibility.trusted(scope)` for a small team, then per item; the read models apply it
-inside their queries ([docs/visibility.md](docs/visibility.md)).
-
-**v0.8.0:** template buttons that answer back. A template's quick-reply buttons carry a payload you
-choose when sending (`Outbound.template_message(..., buttons=("accept:…", "decline:…"))`), and
-`reply_payload(message)` reads it from the press, so an invite or a confirmation can be matched to
-the person who answered.
+Latest: **v0.8.0**, template buttons that answer back. What changed in each release:
+[CHANGELOG.md](CHANGELOG.md).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/flow-dark.svg">
@@ -280,6 +239,110 @@ Browser ─▶ auth (session) ─▶ access (roles → scopes) ─▶ visibility
 A pattern moves into meydan when several real apps need it. Until then, a few clear lines in your
 app beat a framework that guesses your shape.
 
+## Patterns
+
+Recipes built from the parts above, proven in a running instance. They are a few lines in your
+app, not meydan code: copy them and change what you need.
+
+### Sign in by sending a code
+
+Show a code, let the person send it from WhatsApp, and they're signed in:
+
+```python
+auth = Auth(
+    engine,
+    runtime_tables,
+    AuthConfig(audience="ops", code_prefix="OPS"),
+    sign_in_link=lambda code: f"https://wa.me/<your number>?text={code}",
+)
+runtime = Runtime(
+    ..., intercept=[sign_in_interceptor(runtime_tables, confirmed_reply="Signed in.")]
+)
+app.include_router(auth.routes(), prefix="/auth")
+```
+
+- No passwords and no templates: the person writes first, inside WhatsApp's normal rules.
+- The code never reaches your agent; only people with the audience's scope can confirm one.
+- The browser gets an httpOnly session cookie; codes and sessions are stored as hashes.
+
+### Invite someone with a template button
+
+Send a template whose buttons carry a token, and give the role to whoever presses it from that
+number:
+
+```python
+token = secrets.token_urlsafe(16)
+routed = route(
+    conn,
+    runtime_tables,
+    channel="whatsapp",
+    to=Address(ENDPOINT, phone_number_id),
+    sender=tel(phone),
+    evidence={"invite": True},
+)  # a planned contact
+runtime.enqueue(
+    conn,
+    channel="whatsapp",
+    conversation_id=routed.conversation_id,
+    from_number=phone_number_id,
+    to=tel(phone).value,
+    recipient_identity_id=routed.sender_identity_id,
+    messages=[
+        Outbound.template_message(
+            "invite",
+            "en",
+            name="Ada",
+            buttons=(f"invite:accept:{token}", f"invite:decline:{token}"),
+        )
+    ],
+)
+# store sha256(token), routed.actor_id, the role and an expiry in your own table
+
+
+def accept_invites(conn, message, routed):  # Runtime(intercept=[..., accept_invites])
+    if not (reply_payload(message) or "").startswith("invite:accept:"):
+        return None
+    invite = ...  # your row for that token: same actor, not expired, not answered
+    assign(
+        conn,
+        runtime_tables,
+        routed.actor_id,
+        invite.role,
+        invite.object,
+        granted_by=invite.invited_by,
+    )
+    return Intercepted((Outbound.text_message("Welcome!"),))
+```
+
+- Pressing the button from that number proves it's theirs: nobody is picked by a name they typed.
+- It reaches people who never wrote to you, so it works for teammates, partners and members alike.
+- Cancelling is a status on your row; a press after that gets a plain answer, not a role.
+
+### An admin service next to your app
+
+Build a second FastAPI app from the same parts, on its own host and cookie:
+
+```python
+def create_admin_app(settings: Settings | None = None) -> FastAPI:
+    parts = compose(settings or Settings())
+    auth = Auth(
+        parts.engine,
+        runtime_tables,
+        AuthConfig(audience="ops", code_prefix="OPS"),
+        resolve_scopes=parts.access.scopes,
+    )  # roles in your model -> scopes
+    app = FastAPI(lifespan=...)  # access.start(), then access.run(stop) keeps roles synced
+    app.include_router(auth.routes(), prefix="/auth")
+    app.include_router(observe_routes(auth, Visibility.trusted("ops")), prefix="/observe")
+    return app
+```
+
+- Your screens are a static client of this API; what each person sees is decided here.
+- A session for the admin service is useless in your public app, and the other way round.
+
+In summary, the parts stay small and the recipes stay in your app. When the same recipe shows up in
+several apps, it becomes a part.
+
 ## Install
 
 meydan is consumed as a pinned git dependency:
@@ -341,7 +404,7 @@ once real instances need it; the order may change with what they need.
 | Next | What | Builds on |
 |---|---|---|
 | 1 | **Booking**: offering → slot → booking (`proposed → held → confirmed → done / no_show / cancelled`), freed time offered to a waitlist in order | identities, clock |
-| 2 | **Proactive messages**: reminders and offers on a schedule, the 24-hour window with template fallback, consent per purpose | outbox, templates, clock |
+| 2 | **Proactive messages**: reminders and offers on a schedule, the 24-hour window with template fallback, consent per purpose. *Started:* templates with buttons that answer back (v0.8.0) | outbox, templates, clock |
 | 3 | **Outcome ledger**: which conversation led to which booking, and who confirmed it | booking, conversations |
 | 4 | **Second channel** (Telegram), **handoff** to a human and back, calendar adapters | channel contract, runtime |
 | 5 | **Relations** between actors (acts for, member of), linking addresses on proof | identity claims |
