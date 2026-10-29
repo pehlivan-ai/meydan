@@ -41,19 +41,27 @@ type event
 ```python
 from meydan.access import Access, AccessConfig, assign
 
-access = Access(engine, runtime_tables, AccessConfig(
-    api_url="http://openfga:8080", api_token=..., model="access/access.json",
-    instance="instance:main", scopes={"ops": "can_operate"},   # roles -> meydan scopes
-))
-await access.start()                    # store + model (rewritten only when it changed)
-asyncio.create_task(access.run(stop))   # keeps the outbox synced
+access = Access(
+    engine,
+    runtime_tables,
+    AccessConfig(
+        api_url="http://openfga:8080",
+        api_token=...,
+        model="access/access.json",
+        instance="instance:main",
+        scopes={"ops": "can_operate"},  # roles -> meydan scopes
+    ),
+)
+await access.start()  # store + model (rewritten only when it changed)
+asyncio.create_task(access.run(stop))  # keeps the outbox synced
 
 with engine.begin() as conn:
-    assign(conn, runtime_tables, ayse, "manager", "space:yoga")     # data first
+    assign(conn, runtime_tables, ayse, "manager", "space:yoga")  # data first
 
-await access.check(ayse, "can_edit", "event:sunrise",
-                   context=[("space:yoga", "space", "event:sunrise")])   # one question
-await access.list_objects(ayse, "can_edit", "space")                    # what may they edit
+await access.check(
+    ayse, "can_edit", "event:sunrise", context=[("space:yoga", "space", "event:sunrise")]
+)  # one question
+await access.list_objects(ayse, "can_edit", "space")  # what may they edit
 ```
 
 With meydan.auth:
@@ -65,5 +73,8 @@ With meydan.auth:
 ## Notes
 - Mirroring is asynchronous (about a second): a check right after `assign` may still say no until
   `sync_once` ran.
+- If OpenFGA loses its data (a new server, a wiped datastore), `start()` notices the missing store,
+  creates a new one and rebuilds every open assignment from your grants: your database is the
+  source of truth.
 - Run OpenFGA on your internal network only, with a preshared key; its datastore can be your
   Postgres (a separate schema).

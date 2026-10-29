@@ -71,6 +71,16 @@ async def test_starting_twice_closes_the_previous_client(access):
     assert first._api_client.rest_client.pool_manager.closed  # the old connection pool is closed
 
 
+async def test_a_lost_store_is_rebuilt_from_grants(access):
+    ali = person(access)
+    do(access, assign, ali, "manager", "space:yoga")
+    await access.sync_once()
+    await access.client.delete_store()  # OpenFGA loses everything (new server, wiped datastore)
+    await access.start()
+    await access.sync_once()
+    assert await access.check(ali, "can_edit", "space:yoga")  # rebuilt from our grants
+
+
 async def test_assignments_are_data_first_then_synced(access):
     ali = person(access)
     assert do(access, assign, ali, "manager", "space:yoga")

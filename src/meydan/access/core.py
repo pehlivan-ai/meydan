@@ -26,6 +26,7 @@ from openfga_sdk.client.models.write_conflict_opts import (
     ConflictOptions,
 )
 from openfga_sdk.credentials import CredentialConfiguration, Credentials
+from openfga_sdk.exceptions import NotFoundException
 from sqlalchemy import Connection, Engine, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
@@ -192,8 +193,15 @@ class Access:
         digest = hashlib.sha256(model_json.encode()).hexdigest()
         state = await asyncio.to_thread(self._state)
         bootstrap = self._new_client()
+        rebuilt = False
         try:
             store_id = state.get("store_id")
+            if store_id is not None and not await self._store_exists(bootstrap, store_id):
+                # OpenFGA lost our store (new server, wiped datastore): start over and rebuild it
+                # from our own grants, which are the source of truth.
+                log.warning("OpenFGA store %s is gone; rebuilding it from grants", store_id)
+                store_id, rebuilt = None, True
+                state.pop("model_id", None)
             if store_id is None:
                 stores = (await bootstrap.list_stores()).stores
                 found = next((s for s in stores if s.name == self.cfg.store), None)
@@ -212,8 +220,37 @@ class Access:
         await asyncio.to_thread(
             self._save_state, store_id=store_id, model_id=model_id, model_hash=digest
         )
+        if rebuilt:
+            await asyncio.to_thread(self._requeue_all)
         await self.close()  # starting again replaces the client; never leak the old connection
         self._client = self._new_client(store_id, model_id)
+
+    @staticmethod
+    async def _store_exists(client: OpenFgaClient, store_id: str) -> bool:
+        client.set_store_id(store_id)
+        try:
+            await client.get_store()
+            return True
+        except NotFoundException:
+            return False
+
+    def _requeue_all(self) -> None:
+        """Queue every open role assignment again (after OpenFGA lost its data)."""
+        g, o = self.t.grants, self.t.access_outbox
+        with self.engine.begin() as conn:
+            rows = conn.execute(
+                select(g.c.actor_id, g.c.scope, g.c.object).where(
+                    g.c.object.is_not(None), g.c.revoked_at.is_(None)
+                )
+            ).all()
+            if rows:
+                conn.execute(
+                    insert(o),
+                    [
+                        {"op": "write", "user": actor_ref(a), "relation": r, "object": ob}
+                        for a, r, ob in rows
+                    ],
+                )
 
     async def close(self) -> None:
         if self._client is not None:

@@ -1,6 +1,6 @@
 [project]
 name = "meydan"
-version = "0.6.0"
+version = "0.6.1"
 description = "Primitives for running instances of personal and planning agents that coordinate people, one-to-one and in groups."
 readme = "README.md"
 license = "Apache-2.0"
