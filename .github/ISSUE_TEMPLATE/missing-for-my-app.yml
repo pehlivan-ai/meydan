@@ -1,0 +1,29 @@
+name: Missing for my app
+description: Something your app (or your client's) needs from meydan that it doesn't do yet.
+labels: ["need"]
+body:
+  - type: textarea
+    id: need
+    attributes:
+      label: What does the app need to do?
+      description: In plain words, from the point of view of the people using it.
+      placeholder: "People should get a reminder the day before their booking, even if they haven't written for a week."
+    validations:
+      required: true
+  - type: textarea
+    id: missing
+    attributes:
+      label: What's missing in meydan?
+      description: The part you looked for and didn't find, or where it got in your way.
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: How do you work around it today?
+      description: Code you wrote yourself, a manual step, or nothing yet.
+  - type: input
+    id: channel
+    attributes:
+      label: Channel and setup
+      placeholder: "WhatsApp Cloud API, one number, ~200 people a day"

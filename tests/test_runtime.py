@@ -59,6 +59,38 @@ async def test_one_turn_at_a_time_per_conversation(db):
     assert max_running == 1
 
 
+async def test_two_people_writing_at_once_never_mix(db):
+    """Each person's turn holds only their messages, the reply goes only to them, and their
+    history shows only their own conversation, even with two workers running side by side."""
+    seen: list[Turn] = []
+
+    async def handler(turn):
+        seen.append(turn)
+        await asyncio.sleep(0.1)  # overlap the two turns
+        return [Outbound.text_message(f"to {turn.sender.value}: {turn.text}")]
+
+    ch = FakeChannel()
+    a, b = runtime(db, handler, ch), runtime(db, handler, ch)
+    ada, bo = "+905550000001", "+905550000002"
+    receive(a, [msg("a1", "ada 1", T0, sender=ada), msg("b1", "bo 1", T0, sender=bo),
+                msg("a2", "ada 2", T0 + timedelta(seconds=1), sender=ada),
+                msg("b2", "bo 2", T0 + timedelta(seconds=1), sender=bo)])  # fmt: skip
+    await asyncio.gather(a.work_once(), b.work_once())
+    while await a.send_once():
+        pass
+
+    texts = {t.sender.value: t.text for t in seen}
+    assert texts == {ada: "ada 1\nada 2", bo: "bo 1\nbo 2"}
+    assert len({t.conversation_id for t in seen}) == 2
+    assert sorted((to, body) for _, to, body in ch.sent) == [
+        (ada, f"to {ada}: ada 1\nada 2"), (bo, f"to {bo}: bo 1\nbo 2")]  # fmt: skip
+    with a.engine.connect() as c:
+        for turn in seen:
+            said = [s.text for s in a.transcript(c, turn.conversation_id, 10)]
+            mine = "ada" if turn.sender.value == ada else "bo"
+            assert said and all(mine in line for line in said)
+
+
 async def test_replies_go_out_in_order_from_the_number_written_to(db):
     async def three(turn):
         return [Outbound.text_message(t) for t in ("bir", "iki", "üç")]

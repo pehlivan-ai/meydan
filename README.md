@@ -240,6 +240,37 @@ Browser ─▶ auth (session) ─▶ access (roles → scopes) ─▶ visibility
 A pattern moves into meydan when several real apps need it. Until then, a few clear lines in your
 app beat a framework that guesses your shape.
 
+## Guarantees
+
+What meydan promises, and the test that shows it. The tests run against a real Postgres 18 with a
+fake WhatsApp channel, so you can check every line yourself.
+
+| Promise | Shown by |
+|---|---|
+| Every message is stored once, however often WhatsApp delivers it | `test_duplicate_webhooks_are_stored_once`, `test_duplicate_delivery_settles_nothing_new` |
+| Two people writing at the same moment never mix: each turn, reply and history stays with its own person | `test_two_people_writing_at_once_never_mix` |
+| One turn per conversation at a time, even with several workers | `test_one_turn_at_a_time_per_conversation` |
+| A burst of messages becomes one turn, in the order the person sent them | `test_burst_becomes_one_turn_in_the_senders_order` |
+| Replies go out in order, from the number the person wrote to | `test_replies_go_out_in_order_from_the_number_written_to` |
+| A failed send is retried with backoff, then given up with the reason (never silently dropped) | `test_head_of_line_blocks_until_retry_then_dead_letter`, `test_permanent_errors_dead_letter_immediately` |
+| A person who hides or shares their number stays one person, in one conversation | `test_phone_then_both_then_bsuid_only_is_one_actor_and_one_conversation` |
+| Two known people are never merged on a guess | `test_two_known_actors_are_never_merged_automatically` |
+| A template that isn't approved yet holds its message and sends it once approved | `test_pending_template_is_held_out_of_line_and_sent_once_approved` |
+| People see only what their roles allow; reads of message text are audited | `test_text_of_others_is_redacted_unless_allowed_and_then_audited` |
+| Secrets (codes, sessions) are stored only as hashes | `test_secrets_are_stored_only_as_hashes` |
+
+### Verify it yourself
+
+```
+docker run -d --name meydan-pg -p 5432:5432 -e POSTGRES_USER=meydan -e POSTGRES_PASSWORD=meydan \
+  -e POSTGRES_DB=meydan_test postgres:18
+docker run -d --name meydan-fga -p 18080:8080 openfga/openfga:v1.22.0 run   # for the access tests
+uv sync --all-extras
+uv run pytest -v
+```
+
+Without the two containers, the tests that need them are skipped, not failed.
+
 ## Patterns
 
 Recipes built from the parts above, proven in a running instance. They are a few lines in your
