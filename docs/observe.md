@@ -48,6 +48,7 @@ Item names below; the default preset `need_to_know()` maps them to the scopes in
 | `conversation` | transcript + each turn's timeline (received → seen → typing → sent), model, tokens, cost | `message_text` (others' text, audited), `agent_details` (the turns), `costs` |
 | `costs` | per day and per model | `costs` (`costs:read`) |
 | `problems` | failed turns and dead letters with their errors | `operations` (`ops`) |
+| `interactions` (v0.11) | messages we sent and what came of them: queued → sent → delivered → read, and the answers that point at them (button presses, quoted replies), by the app's `ref` (exact or prefix) or template | `operations` (`ops`); `addresses` (else masked); free-text answers need `message_text` (audited), button titles are always shown (they're our own words) |
 
 HTTP (extra `api`), next to `meydan.auth.web`:
 
@@ -56,6 +57,26 @@ from meydan.observe.web import routes as observe_routes
 
 app.include_router(observe_routes(auth, visibility), prefix="/observe")  # 401 / 403 / 404
 ```
+
+### Following a message we sent (since v0.11)
+Give the message a key of your own when you send it, and every later fact about it is found by
+that key, with no table of your own to keep in step:
+
+```python
+Outbound.template_message("invite", "en", buttons=(...), ref=f"invite:{invite_id}")
+```
+
+- The outbox keeps `ref`, `sent_at`, and the receipt times `delivered_at` / `read_at` (the
+  channel's clock, the first receipt that showed it; receipts arrive in any order, and a read
+  counts as a delivery).
+- An answer carries the id of the message it answers (WhatsApp `context.id`) in
+  `Inbound.reply_to`, stored on the inbox row. `replied_to(conn, tables, message)` gives an
+  interceptor the outbox row and `ref` it answers, so it can match by what was answered.
+- `interactions(conn, tables, who, ref=...)` (or `ref_prefix="invite:"`, `template="invite"`)
+  reads it all back for a screen.
+
+Meaning stays in the app: meydan says "delivered at, read at, answered with this button"; what an
+answer does (a role, a registration) is the app's interceptor.
 
 ## Not here (yet)
 - Deep traces (spans per model call and tool call): an optional OpenTelemetry export (planned).

@@ -183,6 +183,7 @@ def parse_messages(payload: dict[str, Any], portfolio: str = "") -> list[Inbound
                     sender_name=profile.get("name"),
                     also=(user,) if phone and user else (),
                     attrs={"username": profile["username"]} if profile.get("username") else {},
+                    reply_to=(m.get("context") or {}).get("id"),
                 )
             )
     return out

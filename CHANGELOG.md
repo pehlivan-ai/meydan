@@ -4,6 +4,24 @@ What changed in each release. Format: [Keep a Changelog](https://keepachangelog.
 versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor version may change
 tables or APIs; the entry says how to upgrade).
 
+## [0.11.0] - 2026-11-02
+### Added
+- Following a message we sent ([docs/observe.md](docs/observe.md)):
+  - `Outbound.ref`: the app's own key for what a message is about (e.g. `invite:<id>`), kept on
+    the outbox row (`text_message(..., ref=)`, `template_message(..., ref=)`).
+  - Receipt times on the outbox: `delivered_at` and `read_at`, from the first receipt that
+    showed them, in any order (a read counts as a delivery).
+  - `Inbound.reply_to`: the id of our message an answer points at (WhatsApp `context.id`,
+    parsed by `parse_messages`), stored on the inbox row; `replied_to(conn, tables, message)`
+    returns the outbox row and `ref` it answers (`Replied`).
+  - Read model `observe.query.interactions(...)` by `ref`, `ref_prefix` or `template`: status,
+    times and answers, with visibility rules (button titles always, free text only with
+    `message_text`, audited).
+### Upgrading
+- New columns: `meydan_inbox.reply_to`, `meydan_outbox.ref`, `delivered_at`, `read_at`, and two
+  partial indexes. Generate a migration in your app (all nullable: the previous version keeps
+  working against the new tables).
+
 ## [0.10.0] - 2026-11-02
 ### Added
 - `identity.plan_contact(...)` for contacts we start (invites, reminders to new numbers): settles

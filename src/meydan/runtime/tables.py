@@ -197,6 +197,7 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         Column("kind", String(30), nullable=False),
         Column("text", Text, nullable=False, server_default=""),
         Column("payload", JSONB(none_as_null=True)),
+        Column("reply_to", String(255)),  # the channel_message_id of ours it answers, if any
         Column("sent_at", DateTime(timezone=True), nullable=False),
         now_col("received_at"),
         # Presence timeline (database clock): when we showed "seen" and "typing…" for it.
@@ -215,6 +216,11 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         inbox.c.received_at,
         postgresql_where=inbox.c.processed_at.is_(None),
     )
+    Index(
+        f"ix_{prefix}inbox_reply_to",
+        inbox.c.reply_to,
+        postgresql_where=inbox.c.reply_to.is_not(None),
+    )
 
     outbox = Table(
         f"{prefix}outbox",
@@ -229,6 +235,7 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         Column("turn_id", UUID(as_uuid=True)),
         Column("seq", Integer, nullable=False, server_default="0"),
         Column("message", JSONB, nullable=False),  # Outbound.to_payload()
+        Column("ref", String(255)),  # Outbound.ref: the app's key for what it's about
         Column("status", String(20), nullable=False, server_default="pending"),
         Column("channel_message_id", String(255), unique=True),  # e.g. wamid once sent
         Column("attempts", Integer, nullable=False, server_default="0"),
@@ -237,6 +244,9 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         Column("last_error", Text),
         now_col("created_at"),
         Column("sent_at", DateTime(timezone=True)),
+        # Receipt times (the channel's clock), each kept from the first receipt that showed it.
+        Column("delivered_at", DateTime(timezone=True)),
+        Column("read_at", DateTime(timezone=True)),
         now_col("updated_at"),
         CheckConstraint(_in("status", OUTBOX_STATUSES), name="status"),
     )
@@ -246,6 +256,7 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         outbox.c.id,
         postgresql_where=outbox.c.status == "pending",
     )
+    Index(f"ix_{prefix}outbox_ref", outbox.c.ref, postgresql_where=outbox.c.ref.is_not(None))
     turns = Table(
         f"{prefix}turns",
         metadata,

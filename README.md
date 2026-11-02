@@ -325,6 +325,7 @@ runtime.enqueue(
             "en",
             name="Ada",
             buttons=(f"invite:accept:{token}", f"invite:decline:{token}"),
+            ref=f"invite:{invite_id}",  # delivery, reads and answers by this key (observe)
         )
     ],
 )

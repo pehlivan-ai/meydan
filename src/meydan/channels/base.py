@@ -43,6 +43,9 @@ class Inbound:
     # (WhatsApp: the BSUID next to the phone number). Evidence for `channel_cooccurrence`.
     also: tuple[Address, ...] = ()
     attrs: dict[str, Any] = field(default_factory=dict)  # e.g. username; stored on the identity
+    # The channel's id of the message of ours this one answers (WhatsApp: a button press or a
+    # quoted reply carries `context.id`, the wamid we sent). Links replies to what they answer.
+    reply_to: str | None = None
 
 
 @dataclass(frozen=True)
@@ -89,18 +92,33 @@ class Outbound:
     # Template quick-reply buttons, in order: the payload each one sends back when pressed
     # (e.g. an invite token), so the reply can be matched to what it answers.
     buttons: tuple[str, ...] = ()
+    # The app's own key for what this message is about (e.g. "invite:<id>"): its delivery,
+    # reads and replies can then be looked up by it (`observe.query.interactions`).
+    ref: str | None = None
 
     @classmethod
-    def text_message(cls, text: str) -> "Outbound":
-        return cls(kind="text", text=text)
+    def text_message(cls, text: str, *, ref: str | None = None) -> "Outbound":
+        return cls(kind="text", text=text, ref=ref)
 
     @classmethod
     def template_message(
-        cls, template: str, language: str, /, *, buttons: tuple[str, ...] = (), **params: str
+        cls,
+        template: str,
+        language: str,
+        /,
+        *,
+        buttons: tuple[str, ...] = (),
+        ref: str | None = None,
+        **params: str,
     ) -> "Outbound":
         # Positional-only, so a template parameter may be called `name` or `template` too.
         return cls(
-            kind="template", template=template, language=language, params=params, buttons=buttons
+            kind="template",
+            template=template,
+            language=language,
+            params=params,
+            buttons=buttons,
+            ref=ref,
         )
 
     def to_payload(self) -> dict[str, Any]:
@@ -111,6 +129,7 @@ class Outbound:
             "language": self.language,
             "params": self.params,
             "buttons": list(self.buttons),
+            "ref": self.ref,
         }
 
     @classmethod

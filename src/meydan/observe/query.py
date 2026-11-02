@@ -474,6 +474,88 @@ def templates(
     ]  # fmt: skip
 
 
+# --- interactions: what came of the messages we sent ----------------------------------------
+
+
+class Answer(BaseModel):
+    at: datetime  # when they sent it (the channel's clock)
+    kind: str  # button | interactive | text | ...
+    text: str | None  # a button's title; free text only for people who may read messages
+
+
+class Interaction(BaseModel):
+    outbox_id: uuid.UUID
+    ref: str | None  # the app's key (Outbound.ref), e.g. "invite:<id>"
+    conversation_id: uuid.UUID
+    template: str | None
+    to: str | None  # in full, masked or None, per visibility
+    status: str  # pending | held | sent | delivered | read | failed | dead
+    error: str | None
+    queued_at: datetime
+    sent_at: datetime | None
+    delivered_at: datetime | None
+    read_at: datetime | None
+    answers: list[Answer]
+
+
+ANSWER_BUTTONS = ("button", "interactive")  # their text is our own button title
+
+
+def interactions(
+    conn: Connection,
+    t: RuntimeTables,
+    who: Principal,
+    *,
+    ref: str | None = None,
+    ref_prefix: str | None = None,
+    template: str | None = None,
+    limit: int = 50,
+    visibility: Visibility = NEED_TO_KNOW,
+) -> list[Interaction]:
+    """Messages we sent and what came of them: queued, sent, delivered, read, and the answers
+    that point at them (button presses, quoted replies). Look up by the app's `ref` (exact or
+    by prefix, e.g. "invite:") or by template name; newest first."""
+    _need(who, visibility.operations)
+    o, i = t.outbox, t.inbox
+    q = select(o).order_by(o.c.created_at.desc(), o.c.id.desc()).limit(limit)
+    if ref is not None:
+        q = q.where(o.c.ref == ref)
+    if ref_prefix is not None:
+        q = q.where(o.c.ref.startswith(ref_prefix, autoescape=True))
+    if template is not None:
+        q = q.where(o.c.message["template"].astext == template)
+    sent = conn.execute(q).all()
+    ids = [r.channel_message_id for r in sent if r.channel_message_id]
+    answers: dict[str, list[Answer]] = {}
+    read_text = visibility.sees(who, "message_text")
+    shown_text = False
+    if ids:
+        for a in conn.execute(
+            select(i.c.reply_to, i.c.sent_at, i.c.kind, i.c.text)
+            .where(i.c.channel.in_({r.channel for r in sent}), i.c.reply_to.in_(ids))
+            .order_by(i.c.sent_at, i.c.id)
+        ):
+            text_ok = a.kind in ANSWER_BUTTONS or read_text
+            shown_text |= text_ok and a.kind not in ANSWER_BUTTONS
+            answers.setdefault(a.reply_to, []).append(
+                Answer(at=a.sent_at, kind=a.kind, text=a.text if text_ok else None)
+            )
+    if shown_text:
+        _audit(conn, t, who, visibility.message_text, "read:messages")
+    if sent:
+        _audit(conn, t, who, visibility.addresses, "read:addresses")
+    return [
+        Interaction(
+            outbox_id=r.id, ref=r.ref, conversation_id=r.conversation_id,
+            template=r.message.get("template"), to=_shown(who, visibility.addresses, r.to),
+            status=r.status, error=r.last_error, queued_at=r.created_at, sent_at=r.sent_at,
+            delivered_at=r.delivered_at, read_at=r.read_at,
+            answers=answers.get(r.channel_message_id or "", []),
+        )
+        for r in sent
+    ]  # fmt: skip
+
+
 # --- problems --------------------------------------------------------------------------------
 
 

@@ -242,3 +242,16 @@ def test_shared_contacts_are_parsed_and_only_names_reach_the_text():
     assert ece.name == "Ece Test" and ali.name == "Ali" and ali.phones == ()
     assert ece.phones[0].address == Address("tel", "+905550000002")
     assert ece.phones[1].address is None and ece.phones[1].phone == "0212 000 00 00"
+
+
+def test_a_button_press_says_which_message_it_answers():
+    [m] = parse_messages(
+        webhook(
+            messages=[
+                {"from": "905550000001", "id": "w1", "timestamp": "1793000000", "type": "button",
+                 "context": {"from": "15550000000", "id": "wamid.OURS"},
+                 "button": {"payload": "invite:accept:x", "text": "Kabul ediyorum"}},
+            ]
+        )
+    )  # fmt: skip
+    assert m.reply_to == "wamid.OURS"

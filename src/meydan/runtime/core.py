@@ -92,6 +92,29 @@ class Said:
 
 
 @dataclass(frozen=True)
+class Replied:
+    """What an incoming message answers: one of our messages, and the app's key for it."""
+
+    outbox_id: uuid.UUID
+    ref: str | None
+    turn_id: uuid.UUID | None
+
+
+def replied_to(conn: Connection, t: RuntimeTables, message: Inbound) -> Replied | None:
+    """The message of ours that `message` answers (a button press, a quoted reply), if the
+    channel said so and we sent it. For interceptors: match the answer by what it answers."""
+    if not message.reply_to:
+        return None
+    o = t.outbox
+    row = conn.execute(
+        select(o.c.id, o.c.ref, o.c.turn_id).where(
+            o.c.channel == message.channel, o.c.channel_message_id == message.reply_to
+        )
+    ).first()
+    return Replied(row.id, row.ref, row.turn_id) if row else None
+
+
+@dataclass(frozen=True)
 class Intercepted:
     """A message handled before the agent (e.g. a sign-in code): no turn runs for it, and these
     replies, if any, are sent."""
@@ -185,6 +208,7 @@ class Runtime:
                 "kind": m.kind,
                 "text": m.text,
                 "payload": m.payload,
+                "reply_to": m.reply_to,
                 "sent_at": m.sent_at,
             }
             stmt = (
@@ -242,6 +266,14 @@ class Runtime:
         conn.execute(
             update(o).where(cond).values(status=s.status, last_error=s.error, updated_at=_clock())
         )
+        # Receipt times, whatever order receipts arrive in: a read implies it was delivered.
+        mine = o.c.channel_message_id == s.message_id
+        if s.status in ("delivered", "read"):
+            conn.execute(
+                update(o).where(mine, o.c.delivered_at.is_(None)).values(delivered_at=s.at)
+            )
+        if s.status == "read":
+            conn.execute(update(o).where(mine, o.c.read_at.is_(None)).values(read_at=s.at))
 
     # --- enqueueing (replies, and proactive messages from planners) -----------------------
 
@@ -280,6 +312,7 @@ class Runtime:
                     "turn_id": turn_id,
                     "seq": seq,
                     "message": m.to_payload(),
+                    "ref": m.ref,
                     "created_at": _clock(),
                     "next_attempt_at": (start_at + offset) if start_at else _clock() + offset,
                 }
@@ -709,6 +742,7 @@ def _turn_from_rows(key: uuid.UUID, rows: list[dict[str, Any]]) -> Turn:
             text=r["text"],
             payload=r["payload"] or {},
             sender_name=r["sender_name"],
+            reply_to=r["reply_to"],
         )
         for r in rows
     ]
