@@ -201,3 +201,44 @@ async def test_bad_config_is_permanent_and_typing_never_raises():
         await c.send("222", "1", Outbound.text_message("x"))
     assert e.value.retryable is False
     await c.typing("222", "wamid.1")  # best effort: must not raise
+
+
+def test_statuses_name_the_recipient_by_phone_and_bsuid():
+    sts = parse_statuses(
+        webhook(
+            statuses=[
+                {"id": "w1", "status": "delivered", "timestamp": "1793000005",
+                 "recipient_id": "905550000001", "recipient_user_id": "TR.111"},
+                {"id": "w2", "status": "sent", "timestamp": "1793000006",
+                 "recipient_id": "TR.111"},
+            ]
+        ),
+        portfolio="p1",
+    )  # fmt: skip
+    phone, user = Address("tel", "+905550000001"), Address("wa-bsuid", "TR.111", "p1")
+    assert sts[0].recipient == (phone, user)
+    assert sts[1].recipient == (Address("wa-bsuid", "TR.111", "p1"),)
+
+
+def test_shared_contacts_are_parsed_and_only_names_reach_the_text():
+    from meydan.channels.whatsapp import shared_contacts
+
+    [m] = parse_messages(
+        webhook(
+            messages=[
+                {"from": "905550000001", "id": "w1", "timestamp": "1793000000", "type": "contacts",
+                 "contacts": [
+                     {"name": {"formatted_name": "Ece Test", "first_name": "Ece"},
+                      "phones": [{"phone": "+90 555 000 00 02", "wa_id": "905550000002",
+                                  "type": "CELL"},
+                                 {"phone": "0212 000 00 00", "type": "WORK"}]},
+                     {"name": {"first_name": "Ali"}, "phones": []},
+                 ]},
+            ]
+        )
+    )  # fmt: skip
+    assert m.text == "Ece Test"  # no numbers in the text a model may see
+    ece, ali = shared_contacts(m)
+    assert ece.name == "Ece Test" and ali.name == "Ali" and ali.phones == ()
+    assert ece.phones[0].address == Address("tel", "+905550000002")
+    assert ece.phones[1].address is None and ece.phones[1].phone == "0212 000 00 00"

@@ -304,21 +304,21 @@ number:
 
 ```python
 token = secrets.token_urlsafe(16)
-routed = route(
+planned = plan_contact(
     conn,
     runtime_tables,
     channel="whatsapp",
     to=Address(ENDPOINT, phone_number_id),
-    sender=tel(phone),
-    evidence={"invite": True},
-)  # a planned contact
+    address=tel(phone),
+    name="Ada",
+)  # settles nothing: an unknown number stays unowned until WhatsApp shows whose it is
 runtime.enqueue(
     conn,
     channel="whatsapp",
-    conversation_id=routed.conversation_id,
+    conversation_id=planned.conversation_id,
     from_number=phone_number_id,
     to=tel(phone).value,
-    recipient_identity_id=routed.sender_identity_id,
+    recipient_identity_id=planned.identity_id,
     messages=[
         Outbound.template_message(
             "invite",
@@ -328,13 +328,15 @@ runtime.enqueue(
         )
     ],
 )
-# store sha256(token), routed.actor_id, the role and an expiry in your own table
+# store sha256(token), planned.identity_id, the role and an expiry in your own table
 
 
 def accept_invites(conn, message, routed):  # Runtime(intercept=[..., accept_invites])
     if not (reply_payload(message) or "").startswith("invite:accept:"):
         return None
-    invite = ...  # your row for that token: same actor, not expired, not answered
+    invite = ...  # your row for that token: not expired, not answered
+    if owner(conn, runtime_tables, invite.identity_id) != routed.actor_id:
+        return Intercepted((Outbound.text_message("This invite is for another number."),))
     assign(
         conn,
         runtime_tables,
@@ -347,6 +349,9 @@ def accept_invites(conn, message, routed):  # Runtime(intercept=[..., accept_inv
 ```
 
 - Pressing the button from that number proves it's theirs: nobody is picked by a name they typed.
+- Someone you already know by another address (a WhatsApp username, no phone shared) is still one
+  person: the delivery receipt names their phone and BSUID together, so the number joins them
+  before they press (no duplicate actor to merge).
 - It reaches people who never wrote to you, so it works for teammates, partners and members alike.
 - Cancelling is a status on your row; a press after that gets a plain answer, not a role.
 

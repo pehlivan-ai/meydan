@@ -151,8 +151,9 @@ class Runtime:
         statuses: Sequence[StatusUpdate],
         template_updates: Sequence[TemplateUpdate] = (),
     ) -> int:
-        """Store new messages (duplicates are ignored), apply delivery receipts and what the
-        channel says about our templates (held messages are released or given up).
+        """Store new messages (duplicates are ignored), apply delivery receipts (and what they say
+        about who received them: `identity.corroborate`) and what the channel says about our
+        templates (held messages are released or given up).
 
         Returns how many messages were new. Cheap: safe to call before answering 200.
         """
@@ -198,6 +199,10 @@ class Runtime:
                 self._intercept(conn, m, routed, inserted[0][0])
         for s in statuses:
             self._apply_status(conn, s)
+            if len(s.recipient) > 1:  # phone + BSUID in one signed receipt: the same person
+                identity.corroborate(
+                    conn, self.t, list(s.recipient), evidence={"status_of": s.message_id}
+                )
         templates.record_all(conn, self.t, template_updates)
         return new
 

@@ -8,6 +8,7 @@ import contextlib
 import hashlib
 import hmac
 from collections.abc import Iterator
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -65,7 +66,48 @@ def _text_of(message: dict[str, Any]) -> str:
     for media in ("image", "video", "document"):
         if kind == media:
             return message.get(media, {}).get("caption", "")
+    if kind == "contacts":  # names only: numbers stay in the payload (`shared_contacts`)
+        names = [c.get("name", {}).get("formatted_name", "") for c in message.get("contacts", [])]
+        return ", ".join(n for n in names if n)
     return ""
+
+
+@dataclass(frozen=True)
+class SharedPhone:
+    phone: str  # as written in the person's address book (not normalized)
+    wa_id: str | None  # set when the number is on WhatsApp: digits, E.164 without "+"
+    type: str | None  # CELL, HOME, WORK, ...
+
+    @property
+    def address(self) -> Address | None:
+        """The number as a `tel` address when WhatsApp vouches for it (wa_id), else None: the
+        app normalizes `phone` itself (country rules are the app's)."""
+        return tel(self.wa_id) if self.wa_id else None
+
+
+@dataclass(frozen=True)
+class SharedContact:
+    """A contact card someone sent us (attachment > Contact)."""
+
+    name: str
+    phones: tuple[SharedPhone, ...]
+
+
+def shared_contacts(message: Inbound) -> list[SharedContact]:
+    """The contact cards in a `contacts` message; [] for anything else."""
+    if message.kind != "contacts":
+        return []
+    out = []
+    for c in message.payload.get("contacts", []):
+        name = c.get("name", {})
+        phones = tuple(
+            SharedPhone(phone=p.get("phone", ""), wa_id=p.get("wa_id") or None, type=p.get("type"))
+            for p in c.get("phones", [])
+            if p.get("phone") or p.get("wa_id")
+        )
+        out.append(SharedContact(name=name.get("formatted_name") or name.get("first_name", ""),
+                                 phones=phones))  # fmt: skip
+    return out
 
 
 def reply_payload(message: Inbound) -> str | None:
@@ -193,12 +235,19 @@ def parse_template_updates(payload: dict[str, Any]) -> list[TemplateUpdate]:
     return out
 
 
-def parse_statuses(payload: dict[str, Any]) -> list[StatusUpdate]:
-    """Delivery receipts for messages we sent."""
+def parse_statuses(payload: dict[str, Any], portfolio: str = "") -> list[StatusUpdate]:
+    """Delivery receipts for messages we sent. A receipt for a message sent to a phone number
+    names the recipient's BSUID too (`recipient_user_id`): both go in `recipient`."""
     out = []
     for value in _values(payload):
         for s in value.get("statuses", []):
             errors = s.get("errors") or []
+            rid, user = s.get("recipient_id"), s.get("recipient_user_id")
+            recipient: list[Address] = []
+            if rid:
+                recipient.append(Address(BSUID, rid, portfolio) if is_bsuid(rid) else tel(rid))
+            if user and user != rid:
+                recipient.append(Address(BSUID, user, portfolio))
             out.append(
                 StatusUpdate(
                     channel=CHANNEL,
@@ -208,6 +257,7 @@ def parse_statuses(payload: dict[str, Any]) -> list[StatusUpdate]:
                     error=(
                         f"{errors[0].get('code')}: {errors[0].get('title')}" if errors else None
                     ),
+                    recipient=tuple(recipient),
                 )
             )
     return out

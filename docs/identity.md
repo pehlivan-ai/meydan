@@ -39,11 +39,25 @@ actor ──< claim >── identity ──< participant >── conversation
 | `endpoint` | our own number/mailbox seen for the first time | owned by a new `agent` actor (apps may rename or re-claim it) |
 | `first_contact` | an unknown address writes | a new `person` actor owns it |
 | `channel_cooccurrence` | the channel asserts two addresses in one signed message (WhatsApp: phone + BSUID) | unowned addresses join the owner automatically |
+| `channel_cooccurrence` (receipt) | a delivery receipt names the recipient by two addresses (WhatsApp: `recipient_id` + `recipient_user_id`) | same as above, but a receipt creates nobody: with no owner among them, nothing happens (`corroborate`) |
 | (conflict) | co-occurring addresses already belong to two actors | a `proposed` claim, once; **never merged automatically** |
 | `proof_of_control`, `person_confirmed`, `self_asserted`, `org_attested`, `heuristic` | planned (challenges, confirmations) | link only on proof; self-asserted phones/emails are never linked on their own; names never link |
 
 Settlement takes an advisory lock per address, so concurrent webhooks for a new person can't
 create two actors.
+
+### Contacts we start
+`plan_contact(conn, tables, channel=, to=, address=, name=)` is for writing first (an invite, a
+reminder to a new number). It settles nothing:
+- a known address gets its owner's conversation (`Planned.actor_id` set);
+- an unknown one stays **unowned** (`actor_id` None), with a conversation of its own and the name
+  we gave it on the identity's attrs.
+
+The channel then shows whose it is, and the policy above links it: the delivery receipt (phone +
+BSUID: joins the person already known by that BSUID), or the person's reply (phone + BSUID, or a
+first contact if nobody knew them). No actor is made on a guess, so there is nothing to merge.
+Apps that act on the answer (an invite button) check the address, not an actor: "does the
+presser own the identity we wrote to?" (`owner(conn, tables, planned.identity_id)`).
 
 ## Routing
 A message goes to the direct conversation between our endpoint and the sender's **actor**, found
@@ -58,7 +72,10 @@ the database clock (a sender's device clock must not interleave with ours).
 
 **WhatsApp** (`meydan.channels.whatsapp`): `from` → `tel` (E.164), `from_user_id` → `wa-bsuid`
 scoped by `parse_messages(payload, portfolio=...)` ("" for a single business portfolio), both in
-one message → `also` (co-occurrence); `contacts[].profile.username` → identity attrs;
+one message → `also` (co-occurrence); receipts' `recipient_id` + `recipient_user_id` →
+`StatusUpdate.recipient` (`parse_statuses(payload, portfolio=...)`, corroborated on receive);
+`contacts[].profile.username` → identity attrs; a contact card someone sends (`type: contacts`)
+→ `shared_contacts(message)` (names in the text, numbers only in the payload);
 `metadata.phone_number_id` → `wa-pnid`. Sending uses `to` for a phone number and `recipient` for
 a BSUID.
 

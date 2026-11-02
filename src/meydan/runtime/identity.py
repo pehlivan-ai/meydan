@@ -12,6 +12,11 @@ Default settlement policy (what links automatically):
 - Nothing else links on its own. If co-occurring addresses already belong to two different
   actors, a `proposed` claim is recorded for the app (or a person) to decide; nothing is merged.
 
+Contacts we start (`plan_contact`: an invite, a reminder to a new number) settle nothing: an
+address nobody owns stays unowned until the channel shows whose it is, either in the person's
+reply or in a receipt that carries their other address (`corroborate`). So no actor is ever made
+on a guess, and there is nothing to merge later.
+
 All functions take the caller's connection and run inside its transaction.
 """
 
@@ -39,6 +44,16 @@ class Routed:
     endpoint_identity_id: uuid.UUID
 
 
+@dataclass(frozen=True)
+class Planned:
+    """Where a contact we start goes, and who it is if that is known already."""
+
+    conversation_id: uuid.UUID
+    identity_id: uuid.UUID  # the address we write to
+    actor_id: uuid.UUID | None  # its owner now; None until the channel shows whose it is
+    endpoint_identity_id: uuid.UUID
+
+
 def lock(conn: Connection, *addresses: Address) -> None:
     """Serialize settlement per address (two webhooks for a new person must not make two actors).
 
@@ -60,6 +75,16 @@ def resolve(conn: Connection, t: RuntimeTables, address: Address, **attrs: Any) 
         set_={"attrs": i.c.attrs.op("||")(stmt.excluded.attrs), "last_seen_at": func.now()},
     ).returning(i.c.id)
     return conn.execute(stmt).scalar_one()
+
+
+def find(conn: Connection, t: RuntimeTables, address: Address) -> uuid.UUID | None:
+    """The identity for an address, if we have seen it (creates nothing)."""
+    i = t.identities
+    return conn.scalar(
+        select(i.c.id).where(
+            i.c.scheme == address.scheme, i.c.scope == address.scope, i.c.value == address.value
+        )
+    )
 
 
 def owner(conn: Connection, t: RuntimeTables, identity_id: uuid.UUID) -> uuid.UUID | None:
@@ -161,6 +186,30 @@ def _propose_once(
         claim(conn, t, identity, actor, "channel_cooccurrence", state="proposed", evidence=evidence)
 
 
+def corroborate(
+    conn: Connection,
+    t: RuntimeTables,
+    addresses: list[Address],
+    *,
+    evidence: dict[str, Any],
+) -> uuid.UUID | None:
+    """The channel says, in a signed message that is not from the person (a delivery receipt that
+    names the recipient's phone number and BSUID), that these addresses are one person.
+
+    Same policy as an inbound message (`channel_cooccurrence`), with one difference: a receipt is
+    not a contact, so it creates nobody. If no actor owns any of the addresses, nothing happens;
+    the person's first message settles them. Two owners: `proposed`, never merged.
+    Returns the owner afterwards, if there is one."""
+    if len(addresses) < 2:
+        return None
+    lock(conn, *addresses)
+    found = [find(conn, t, a) for a in addresses]
+    if not any(i is not None and owner(conn, t, i) is not None for i in found):
+        return None
+    ids = [i or resolve(conn, t, a) for i, a in zip(found, addresses, strict=True)]
+    return settle(conn, t, ids[0], ids[1:], evidence=evidence)
+
+
 def endpoint(conn: Connection, t: RuntimeTables, address: Address) -> uuid.UUID:
     """Our side of a conversation (a number, mailbox, agent). Owned by an agent actor, created on
     first sight; apps can name it or claim the endpoint for their own agent actor."""
@@ -216,6 +265,63 @@ def direct_conversation(
     return found
 
 
+def _address_conversation(
+    conn: Connection, t: RuntimeTables, channel: str, endpoint_id: uuid.UUID, identity: uuid.UUID
+) -> uuid.UUID:
+    """The direct conversation with an address nobody owns yet, created if there is none. Once
+    the address is claimed, `direct_conversation` finds it through the claim."""
+    cv, p = t.conversations, t.participants
+    found = conn.scalar(
+        select(cv.c.id)
+        .join(p, p.c.conversation_id == cv.c.id)
+        .where(
+            cv.c.kind == "direct",
+            cv.c.channel == channel,
+            cv.c.endpoint_identity_id == endpoint_id,
+            p.c.identity_id == identity,
+            p.c.role == "peer",
+        )
+        .order_by(cv.c.id)
+        .limit(1)
+    )
+    if found is None:
+        found = conn.execute(
+            insert(cv)
+            .values(kind="direct", channel=channel, endpoint_identity_id=endpoint_id)
+            .returning(cv.c.id)
+        ).scalar_one()
+        conn.execute(insert(p).values(conversation_id=found, identity_id=endpoint_id, role="self"))
+        conn.execute(insert(p).values(conversation_id=found, identity_id=identity, role="peer"))
+    return found
+
+
+def plan_contact(
+    conn: Connection,
+    t: RuntimeTables,
+    *,
+    channel: str,
+    to: Address,
+    address: Address,
+    name: str | None = None,
+    attrs: dict[str, Any] | None = None,
+) -> Planned:
+    """A conversation we start with an address (an invite, a reminder to a new number).
+
+    Settles nothing. A known address gets its owner's conversation; an unknown one stays unowned
+    and gets a conversation of its own, adopted by whoever the channel later shows it belongs to.
+    `to` is our endpoint; `name` (how we call them) is kept on the identity, not on an actor."""
+    lock(conn, address)
+    endpoint_id = endpoint(conn, t, to)
+    identity_attrs = {k: v for k, v in {"name": name, **(attrs or {})}.items() if v}
+    identity_id = resolve(conn, t, address, **identity_attrs)
+    actor = owner(conn, t, identity_id)
+    if actor is None:
+        conversation = _address_conversation(conn, t, channel, endpoint_id, identity_id)
+    else:
+        conversation = direct_conversation(conn, t, channel, endpoint_id, actor, [identity_id])
+    return Planned(conversation, identity_id, actor, endpoint_id)
+
+
 def route(
     conn: Connection,
     t: RuntimeTables,
@@ -228,7 +334,8 @@ def route(
     attrs: dict[str, Any] | None = None,
     evidence: dict[str, Any] | None = None,
 ) -> Routed:
-    """Resolve, settle and find the conversation for one inbound message (or a planned contact)."""
+    """Resolve, settle and find the conversation for one inbound message. Contacts we start go
+    through `plan_contact` instead (it settles nothing)."""
     lock(conn, sender, *also)
     endpoint_id = endpoint(conn, t, to)
     sender_attrs = {k: v for k, v in {"name": name, **(attrs or {})}.items() if v}

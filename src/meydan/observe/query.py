@@ -145,7 +145,8 @@ def _peer(t: RuntimeTables):
         select(
             p.c.conversation_id,
             c.c.actor_id,
-            a.c.name,
+            # An address nobody owns yet (a contact we started) shows the name we gave it.
+            func.coalesce(a.c.name, ident.c.attrs["name"].astext).label("name"),
             ident.c.value.label("address"),
         )
         .join(ident, ident.c.id == p.c.identity_id)

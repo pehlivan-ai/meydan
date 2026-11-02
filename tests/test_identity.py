@@ -127,3 +127,90 @@ async def test_transcript_orders_both_sides_on_one_clock(db):
         ("in", "iki"),
         ("out", "re: iki"),
     ]
+
+
+# --- contacts we start (plan_contact) and receipts that say who received them (corroborate) ---
+
+
+def plan(rt, address, name="Deniz"):
+    from meydan.runtime.identity import plan_contact
+
+    with rt.engine.begin() as c:
+        return plan_contact(
+            c, rt.t, channel="whatsapp", to=Address("wa-pnid", "222"), address=address, name=name
+        )
+
+
+def receipt(mid="wamid.S1", phone=PHONE, user=BSUID, status="delivered"):
+    from meydan.channels.base import StatusUpdate
+
+    who = (Address("tel", phone),) if phone else ()
+    who += (bsuid(user),) if user else ()
+    return StatusUpdate("whatsapp", mid, status, T0, recipient=who)
+
+
+def people(rt):
+    return count(rt, rt.t.actors, rt.t.actors.c.kind == "person")
+
+
+async def test_a_planned_contact_creates_no_actor(db):
+    rt = runtime(db, noop)
+    p = plan(rt, Address("tel", PHONE))
+    assert p.actor_id is None and people(rt) == 0
+    assert count(rt, rt.t.claims, rt.t.claims.c.identity_id == p.identity_id) == 0
+    assert plan(rt, Address("tel", PHONE)).conversation_id == p.conversation_id  # found again
+    ident = rows(rt, rt.t.identities, rt.t.identities.c.id == p.identity_id)[0]
+    assert ident.attrs["name"] == "Deniz"  # the name we gave lives on the address
+
+
+async def test_receipt_links_a_planned_phone_to_the_person_known_by_bsuid(db):
+    rt = runtime(db, noop)
+    t = rt.t
+    receive(rt, [msg("w1", "kullanıcı adıyla", T0, sender=BSUID)])  # actor A: BSUID only
+    p = plan(rt, Address("tel", PHONE))  # an invite to A's phone number, not knowing it's A
+    assert p.actor_id is None
+    receive(rt, statuses=[receipt()])  # WhatsApp: this phone's BSUID is A's
+    assert people(rt) == 1
+    [link] = rows(rt, t.claims, t.claims.c.identity_id == p.identity_id)
+    assert link.state == "active" and link.basis == "channel_cooccurrence"
+    assert link.evidence == {"status_of": "wamid.S1"}
+    receive(rt, statuses=[receipt(status="read")])  # receipts repeat: nothing new
+    assert count(rt, t.claims) == 3  # our endpoint's, A's BSUID, and now the phone
+
+
+async def test_receipt_about_strangers_settles_nothing_and_the_reply_adopts_the_conversation(db):
+    rt = runtime(db, noop)
+    t = rt.t
+    p = plan(rt, Address("tel", PHONE))
+    receive(rt, statuses=[receipt()])  # a receipt is not a contact: nobody is created
+    assert people(rt) == 0 and count(rt, t.claims) == 1  # only our endpoint's claim
+    receive(rt, [msg("w1", "Kabul ediyorum", T0, also=(bsuid(),))])  # their first message
+    assert people(rt) == 1
+    assert count(rt, t.conversations) == 1  # the planned conversation, now theirs
+    [row] = rows(rt, t.inbox)
+    assert row.conversation_id == p.conversation_id
+
+
+async def test_planning_a_known_number_uses_its_owner_and_conversation(db):
+    rt = runtime(db, noop)
+    receive(rt, [msg("w1", "selam", T0)])
+    [conversation] = rows(rt, rt.t.conversations)
+    p = plan(rt, Address("tel", PHONE))
+    assert p.actor_id is not None and p.conversation_id == conversation.id
+
+
+async def test_receipt_about_two_known_people_only_proposes(db):
+    rt = runtime(db, noop)
+    t = rt.t
+    receive(rt, [msg("w1", "telefonla", T0)])  # A owns the phone
+    receive(rt, [msg("w2", "kullanıcı adıyla", T0, sender=OTHER)])  # B owns another BSUID
+    receive(rt, statuses=[receipt(user=OTHER)])
+    assert people(rt) == 2
+    assert count(rt, t.claims, t.claims.c.state == "proposed") == 1
+
+
+async def test_a_receipt_with_one_address_changes_nothing(db):
+    rt = runtime(db, noop)
+    plan(rt, Address("tel", PHONE))
+    receive(rt, statuses=[receipt(user=None)])
+    assert people(rt) == 0

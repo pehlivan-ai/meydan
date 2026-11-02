@@ -54,6 +54,9 @@ class StatusUpdate:
     status: Literal["sent", "delivered", "read", "failed"]
     at: datetime
     error: str | None = None
+    # Who received it, as the channel names them (WhatsApp: the phone number and the BSUID).
+    # Two addresses here are a channel assertion that they are one person (`corroborate`).
+    recipient: tuple[Address, ...] = ()
 
 
 @dataclass(frozen=True)

@@ -4,6 +4,27 @@ What changed in each release. Format: [Keep a Changelog](https://keepachangelog.
 versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor version may change
 tables or APIs; the entry says how to upgrade).
 
+## [0.10.0] - 2026-11-02
+### Added
+- `identity.plan_contact(...)` for contacts we start (invites, reminders to new numbers): settles
+  nothing; an unknown address stays unowned, with a conversation of its own, until the channel
+  shows whose it is. Returns `Planned(conversation_id, identity_id, actor_id | None, ...)`.
+- Receipts say who received a message: `StatusUpdate.recipient` (WhatsApp `recipient_id` +
+  `recipient_user_id`), and `runtime.receive` corroborates them (`identity.corroborate`): an
+  unowned phone joins the person already known by that BSUID. A receipt creates nobody and merges
+  nobody (two owners: `proposed`). `parse_statuses(payload, portfolio=...)` scopes BSUIDs.
+- `shared_contacts(message)` for contact cards someone sends (`SharedContact`, `SharedPhone`
+  with `.address` when WhatsApp vouches for the number); the message text carries names only.
+- `identity.find(...)`: an address's identity without creating one.
+- Conversation lists show the name we gave an address nobody owns yet.
+### Changed
+- The invite pattern in the README uses `plan_contact` and checks the address's owner on the
+  press, not the actor stored at sending.
+### Upgrading
+- No table changes. Pass `portfolio=` to `parse_statuses` if you pass it to `parse_messages`.
+- If you started contacts with `route(...)`, switch to `plan_contact(...)` so an unknown number
+  doesn't become a new person before they answer.
+
 ## [0.9.0] - 2026-10-30
 ### Added
 - Templates: meydan keeps each template's state from the channel (review, pauses, category,
