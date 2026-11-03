@@ -4,6 +4,22 @@ What changed in each release. Format: [Keep a Changelog](https://keepachangelog.
 versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor version may change
 tables or APIs; the entry says how to upgrade).
 
+## [0.14.0] - 2026-11-03
+### Added
+- Endpoints ([docs/endpoints.md](docs/endpoints.md)): our own numbers and email addresses with
+  their latest state (`meydan.runtime.endpoints`: `record`, `sync`, `endpoints`, `get`), read as
+  checks (`ok` / `warn` / `fail`) whose worst is the endpoint's health.
+- `WhatsAppCloud` number management: `list_numbers`, `number`, `add_number`, `request_code`,
+  `verify_code`, `register`, `profile`, `set_profile` (errors as `GraphError`, never the token);
+  `whatsapp.number_events(payload)`: accounts whose numbers changed, to sync.
+- `meydan.channels.email.dns_health`: MX, SPF, DKIM, DMARC and DMARC reports of an address's
+  domain (extra `meydan[email]`, dnspython).
+- `python -m meydan.cli`: `numbers list|add|request-code|verify|register|profile|copy-profile`,
+  `email check`.
+- `observe.query.endpoints` and `GET /observe/endpoints` (visibility item `operations`).
+### Upgrading
+- New table `meydan_endpoints`: generate a migration in your app.
+
 ## [0.13.0] - 2026-11-03
 ### Added
 - Expect and ask ([docs/expect.md](docs/expect.md)): a stored expectation that an incoming

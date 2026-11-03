@@ -81,6 +81,24 @@ class TemplateUpdate:
 
 
 @dataclass(frozen=True)
+class EndpointUpdate:
+    """What a channel (or a check) says about one of our own addresses: a WhatsApp number we send
+    from, an email address people write to. Fields the source doesn't speak about are None."""
+
+    channel: str
+    address: Address  # ours (WhatsApp: wa-pnid, the phone_number_id; email: mailto)
+    at: datetime  # when it was reported or checked
+    account: str | None = None  # who owns it on the channel (WhatsApp: the WABA id; email: domain)
+    display: str | None = None  # how people see it: "+90 555 ...", "hello@example.com"
+    name: str | None = None  # the name shown with it (WhatsApp: the verified display name)
+    status: str | None = None  # the channel's words (WhatsApp: CONNECTED, FLAGGED, BANNED, ...)
+    quality: str | None = None  # GREEN | YELLOW | RED | UNKNOWN
+    limit: str | None = None  # messaging limit (WhatsApp: TIER_250, TIER_1K, ..., UNLIMITED)
+    # Everything else the source reports, by name (name review, verification, DNS checks, ...).
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class Outbound:
     """Something to send in a conversation: free-form text or an approved template."""
 

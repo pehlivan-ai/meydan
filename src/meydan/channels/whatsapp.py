@@ -16,6 +16,7 @@ import httpx
 
 from meydan.channels.base import (
     Address,
+    EndpointUpdate,
     Inbound,
     Outbound,
     SendError,
@@ -264,6 +265,79 @@ def parse_statuses(payload: dict[str, Any], portfolio: str = "") -> list[StatusU
     return out
 
 
+# The fields of a phone number we keep (GET /<WABA>/phone_numbers).
+NUMBER_FIELDS = (
+    "id,display_phone_number,verified_name,status,quality_rating,name_status,"
+    "code_verification_status,platform_type,messaging_limit_tier,throughput,account_mode"
+)
+# Webhook fields that say a number changed: answered by syncing the account again, because they
+# name the number by its display form only.
+NUMBER_EVENTS = frozenset({"phone_number_quality_update", "phone_number_name_update"})
+
+
+def number_checks(n: dict[str, Any]) -> list[dict[str, str]]:
+    """What a phone number's state means for sending from it: checks (ok | warn | fail)."""
+    out: list[dict[str, str]] = []
+
+    def check(name: str, value: Any, ok: set[str], warn: set[str], hint: str = "") -> None:
+        if value is None:
+            return
+        v = str(value)
+        level = "ok" if v in ok else "warn" if v in warn else "fail"
+        out.append({"name": name, "level": level, "detail": v if level == "ok" else v + hint})
+
+    check(
+        "status", n.get("status"), {"CONNECTED"},
+        {"PENDING", "FLAGGED", "RATE_LIMITED", "RESTRICTED", "MIGRATED", "UNKNOWN"},
+        ": not sending normally",
+    )  # fmt: skip
+    check("quality", n.get("quality_rating"), {"GREEN", "UNKNOWN", "NA"}, {"YELLOW"})
+    check(
+        "name", n.get("name_status"), {"APPROVED", "AVAILABLE_WITHOUT_REVIEW"},
+        {"PENDING_REVIEW", "NONE", "EXPIRED"}, ": display name not approved",
+    )  # fmt: skip
+    check("verification", n.get("code_verification_status"), {"VERIFIED"},
+          {"NOT_VERIFIED", "EXPIRED"}, ": request a code and verify")  # fmt: skip
+    check("platform", n.get("platform_type"), {"CLOUD_API"}, {"NOT_APPLICABLE"},
+          ": not registered on the Cloud API")  # fmt: skip
+    return out
+
+
+def number_update(account: str, n: dict[str, Any], at: datetime) -> EndpointUpdate:
+    details = {
+        k: n[k]
+        for k in ("name_status", "code_verification_status", "platform_type", "account_mode")
+        if n.get(k) is not None
+    }
+    if isinstance(n.get("throughput"), dict):
+        details["throughput"] = n["throughput"].get("level")
+    details["checks"] = number_checks(n)
+    return EndpointUpdate(
+        channel=CHANNEL, address=Address(ENDPOINT, str(n["id"])), at=at, account=account,
+        display=n.get("display_phone_number"), name=n.get("verified_name"),
+        status=n.get("status"), quality=n.get("quality_rating"),
+        limit=n.get("messaging_limit_tier"), details=details,
+    )  # fmt: skip
+
+
+def number_events(payload: dict[str, Any]) -> set[str]:
+    """Business accounts whose numbers changed (quality, limit, display name): sync them."""
+    return {
+        str(entry.get("id", ""))
+        for entry in payload.get("entry", [])
+        for change in entry.get("changes", [])
+        if change.get("field") in NUMBER_EVENTS
+    } - {""}
+
+
+class GraphError(Exception):
+    """A Graph API call that failed, with Meta's code and message (never the token)."""
+
+    def __init__(self, status: int, code: Any, message: str):
+        super().__init__(f"{status} {code}: {message}")
+        self.status, self.code = status, code
+
+
 class WhatsAppCloud:
     """Sends on behalf of any of our numbers: the caller passes `from_number` (phone_number_id),
     so replies go out from the number the person wrote to (reply affinity)."""
@@ -334,6 +408,92 @@ class WhatsAppCloud:
                 )
             url, params = data.get("paging", {}).get("next"), None  # `next` carries the query
         return out
+
+    async def _graph(
+        self, method: str, path: str, *, json: dict | None = None, params: dict | None = None
+    ) -> dict[str, Any]:
+        r = await self._client.request(
+            method, f"{GRAPH}/{self._version}/{path}", json=json, params=params,
+            headers={"Authorization": f"Bearer {self._token}"},
+        )  # fmt: skip
+        if r.status_code < 300:
+            return r.json()
+        try:
+            err = r.json().get("error", {})
+        except ValueError:
+            err = {}
+        raise GraphError(r.status_code, err.get("code"), err.get("message", r.text[:200]))
+
+    # Numbers: the business management side (permission whatsapp_business_management).
+    # Order to bring a number in: add_number -> request_code -> verify_code -> register.
+
+    async def list_numbers(self, account: str) -> list[EndpointUpdate]:
+        """Every phone number of a business account as it stands now, with its checks."""
+        now, out = datetime.now(UTC), []
+        data = await self._graph(
+            "GET", f"{account}/phone_numbers", params={"fields": NUMBER_FIELDS, "limit": 100}
+        )
+        while True:
+            out += [number_update(account, n, now) for n in data.get("data", [])]
+            after = data.get("paging", {}).get("cursors", {}).get("after")
+            if not after or not data.get("paging", {}).get("next"):
+                return out
+            data = await self._graph(
+                "GET", f"{account}/phone_numbers",
+                params={"fields": NUMBER_FIELDS, "limit": 100, "after": after},
+            )  # fmt: skip
+
+    async def number(self, phone_number_id: str) -> dict[str, Any]:
+        return await self._graph("GET", phone_number_id, params={"fields": NUMBER_FIELDS})
+
+    async def add_number(
+        self, account: str, country_code: str, phone_number: str, verified_name: str
+    ) -> str:
+        """Add a number to the business account (its display name goes to review). Returns the
+        new phone_number_id. `phone_number` is the national part, digits only."""
+        data = await self._graph(
+            "POST", f"{account}/phone_numbers",
+            json={"cc": country_code, "phone_number": phone_number,
+                  "verified_name": verified_name},
+        )  # fmt: skip
+        return str(data["id"])
+
+    async def request_code(
+        self, phone_number_id: str, method: str = "SMS", language: str = "en_US"
+    ) -> None:
+        """Send the number a verification code by SMS or VOICE (landlines: VOICE)."""
+        await self._graph(
+            "POST", f"{phone_number_id}/request_code",
+            json={"code_method": method, "language": language},
+        )  # fmt: skip
+
+    async def verify_code(self, phone_number_id: str, code: str) -> None:
+        await self._graph("POST", f"{phone_number_id}/verify_code", json={"code": code})
+
+    async def register(self, phone_number_id: str, pin: str) -> None:
+        """Register the verified number on the Cloud API with its two-step verification PIN
+        (six digits; choose one and keep it: re-registering needs it)."""
+        await self._graph(
+            "POST", f"{phone_number_id}/register",
+            json={"messaging_product": "whatsapp", "pin": pin},
+        )  # fmt: skip
+
+    async def set_profile(self, phone_number_id: str, **fields: Any) -> None:
+        """Business profile shown with the number: about, address, description, email,
+        websites (list), vertical."""
+        if not fields:
+            raise ValueError("nothing to set")
+        await self._graph(
+            "POST", f"{phone_number_id}/whatsapp_business_profile",
+            json={"messaging_product": "whatsapp", **fields},
+        )  # fmt: skip
+
+    async def profile(self, phone_number_id: str) -> dict[str, Any]:
+        data = await self._graph(
+            "GET", f"{phone_number_id}/whatsapp_business_profile",
+            params={"fields": "about,address,description,email,websites,vertical"},
+        )  # fmt: skip
+        return (data.get("data") or [{}])[0]
 
     async def send(self, from_number: str, to: str, message: Outbound) -> str:
         """Send one message; returns the channel message id (wamid).

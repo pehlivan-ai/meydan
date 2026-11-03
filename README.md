@@ -391,6 +391,31 @@ for m in interactions(conn, tables, who, turn_id=turn_id, within=timedelta(hours
 - What the answer said (accepted, declined, a question) is a separate axis: the scale says how far
   it got, not whether it went well.
 
+### Your own numbers and addresses (a second WhatsApp number)
+
+Replies already go out from the number each person wrote to, so a second number only needs to be
+brought in. The CLI does it (token with `whatsapp_business_management`):
+
+```
+python -m meydan.cli numbers add --account WABA_ID --cc 90 --number 5551234567 --name "Brand"
+python -m meydan.cli numbers request-code PHONE_NUMBER_ID      # SMS; --voice for landlines
+python -m meydan.cli numbers verify PHONE_NUMBER_ID 123456
+python -m meydan.cli numbers register PHONE_NUMBER_ID          # asks for a 6-digit PIN
+python -m meydan.cli numbers copy-profile OLD_ID PHONE_NUMBER_ID
+python -m meydan.cli email check hello@example.com --selector google
+```
+
+Then keep their health with the app (status, quality, limit, display name review; for email:
+MX, SPF, DKIM, DMARC), read as checks (`ok` / `warn` / `fail`):
+
+```python
+await endpoints.sync(engine, tables, whatsapp_cloud, account=waba_id)        # numbers
+endpoints.record(conn, tables, dns_health("hello@example.com", selectors=["google"]))
+query.endpoints(conn, tables, who)                                            # GET /observe/endpoints
+```
+
+Details: [docs/endpoints.md](docs/endpoints.md).
+
 ### An admin service next to your app
 
 Build a second FastAPI app from the same parts, on its own host and cookie:
@@ -477,7 +502,7 @@ once real instances need it; the order may change with what they need.
 | Next | What | Builds on |
 |---|---|---|
 | 1 | **Booking**: offering → slot → booking (`proposed → held → confirmed → done / no_show / cancelled`), freed time offered to a waitlist in order | identities, clock |
-| 2 | **Proactive messages**: reminders and offers on a schedule, the 24-hour window with template fallback, consent per purpose. *Started:* templates with buttons that answer back (v0.8.0), template state with hold and resume (v0.9.0), contacts we start (v0.10.0), following a sent message (v0.11.0), the engagement scale (v0.12.0), ask and wait for the answer (v0.13.0) | outbox, templates, clock |
+| 2 | **Proactive messages**: reminders and offers on a schedule, the 24-hour window with template fallback, consent per purpose. *Started:* templates with buttons that answer back (v0.8.0), template state with hold and resume (v0.9.0), contacts we start (v0.10.0), following a sent message (v0.11.0), the engagement scale (v0.12.0), ask and wait for the answer (v0.13.0), our own numbers and addresses (v0.14.0) | outbox, templates, clock |
 | 3 | **Outcome ledger**: which conversation led to which booking, and who confirmed it | booking, conversations |
 | 4 | **Second channel** (Telegram), **handoff** to a human and back, calendar adapters | channel contract, runtime |
 | 5 | **Relations** between actors (acts for, member of), linking addresses on proof | identity claims |

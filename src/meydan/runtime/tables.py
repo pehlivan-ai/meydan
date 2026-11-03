@@ -70,6 +70,7 @@ class RuntimeTables:
     access_outbox: Table
     access_state: Table
     templates: Table
+    endpoints: Table
     expectations: Table
 
 
@@ -419,6 +420,28 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         UniqueConstraint("channel", "name", "language"),
     )
 
+    # Our own addresses (meydan.runtime.endpoints): the numbers we send from, the email
+    # addresses people write to, with their health as the channel or a check last reported it.
+    endpoints = Table(
+        f"{prefix}endpoints",
+        metadata,
+        id_col(),
+        Column("channel", String(20), nullable=False),
+        Column("scheme", String(20), nullable=False),  # wa-pnid | mailto | ...
+        Column("value", String(320), nullable=False),
+        Column("account", String(255)),
+        Column("display", String(320)),
+        Column("name", String(255)),
+        Column("status", String(40)),
+        Column("quality", String(20)),
+        Column("limit", String(40)),
+        Column("details", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+        Column("reported_at", DateTime(timezone=True)),  # source time of what we keep
+        now_col("created_at"),
+        now_col("updated_at"),
+        UniqueConstraint("scheme", "value"),
+    )
+
     # What we're waiting for (meydan.runtime.expect): a durable promise an incoming message
     # completes. pending -> answered | expired | cancelled | undeliverable, once.
     expectations = Table(
@@ -475,5 +498,6 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         access_outbox=access_outbox,
         access_state=access_state,
         templates=templates,
+        endpoints=endpoints,
         expectations=expectations,
     )
