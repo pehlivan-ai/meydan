@@ -4,6 +4,14 @@ What changed in each release. Format: [Keep a Changelog](https://keepachangelog.
 versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor version may change
 tables or APIs; the entry says how to upgrade).
 
+## [0.12.1] - 2026-11-03
+### Changed
+- `meydan.runtime.core` (760 lines) split by responsibility, behaviour unchanged: `types`
+  (channel, turn, interceptor, config), `inbound` (receive, interceptors, receipts,
+  `replied_to`), `outbound` (enqueue, sender, `backoff`), `worker` (seen, turns), `conversation`
+  (`Said`, `transcript`). `Runtime` is the one face over them; every name importable before still
+  is (`meydan.runtime`, `meydan.runtime.core`). The test suite passes unchanged.
+
 ## [0.12.0] - 2026-11-03
 ### Added
 - Engagement: one ordinal scale for every message we send, on every channel
