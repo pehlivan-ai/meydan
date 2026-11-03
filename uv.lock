@@ -517,6 +517,15 @@ wheels = [
 ]
 
 [[package]]
+name = "dnspython"
+version = "2.9.1"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/91/21/7fcd6780f61e9756aafaea760560509bb4111375daa2e23c1be7a89f33f1/dnspython-2.9.1.tar.gz", hash = "sha256:9a6d30e55f8dc63e6052597666112bff0586b95a2474a9deda03afbbf820d37a", size = 455302, upload-time = "2026-10-29T18:05:12.156Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/61/55/f90405bbbbd3dd8f788e92cec2d39964f5c09783f0570fc35f3bb3381485/dnspython-2.9.1-py3-none-any.whl", hash = "sha256:7c81caf8de1ed57b8cfc7e0ad4f528a0b8ceace473c7eb946df195dc9def751f", size = 360364, upload-time = "2026-10-29T18:05:10.206Z" },
+]
+
+[[package]]
 name = "fastapi"
 version = "0.162.0"
 source = { registry = "https://pypi.org/simple" }
@@ -883,7 +892,7 @@ wheels = [
 
 [[package]]
 name = "meydan"
-version = "0.13.0"
+version = "0.14.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
@@ -896,6 +905,9 @@ access = [
 ]
 api = [
     { name = "fastapi" },
+]
+email = [
+    { name = "dnspython" },
 ]
 llm = [
     { name = "httpx" },
@@ -919,6 +931,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "dnspython", marker = "extra == 'email'", specifier = ">=2.6" },
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.115" },
     { name = "httpx", marker = "extra == 'llm'", specifier = ">=0.28" },
     { name = "httpx", marker = "extra == 'runtime'", specifier = ">=0.28" },
@@ -931,7 +944,7 @@ requires-dist = [
     { name = "sqlalchemy", marker = "extra == 'runtime'", specifier = ">=2.1" },
     { name = "tenacity", marker = "extra == 'llm'", specifier = ">=9" },
 ]
-provides-extras = ["runtime", "api", "llm", "access"]
+provides-extras = ["runtime", "api", "llm", "access", "email"]
 
 [package.metadata.requires-dev]
 dev = [

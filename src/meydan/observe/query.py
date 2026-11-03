@@ -476,6 +476,46 @@ def templates(
     ]  # fmt: skip
 
 
+# --- endpoints: our own numbers and addresses -------------------------------------------------
+
+
+class EndpointCheck(BaseModel):
+    name: str
+    level: str  # ok | warn | fail
+    detail: str
+
+
+class EndpointRow(BaseModel):
+    channel: str
+    address: str  # scheme:value (wa-pnid:<id>, mailto:<address>)
+    display: str | None
+    name: str | None
+    status: str | None
+    quality: str | None
+    limit: str | None
+    health: str | None  # the worst check; None: nothing reported yet
+    checks: list[EndpointCheck]
+    reported_at: datetime | None
+
+
+def endpoints(
+    conn: Connection, t: RuntimeTables, who: Principal, *, visibility: Visibility = NEED_TO_KNOW
+) -> list[EndpointRow]:
+    """Our numbers and email addresses with their health, as last reported."""
+    from meydan.runtime.endpoints import endpoints as stored
+
+    _need(who, visibility.operations)
+    return [
+        EndpointRow(
+            channel=e.channel, address=str(e.address), display=e.display, name=e.name,
+            status=e.status, quality=e.quality, limit=e.limit, health=e.health,
+            checks=[EndpointCheck(name=c.name, level=c.level, detail=c.detail) for c in e.checks],
+            reported_at=e.reported_at,
+        )
+        for e in stored(conn, t)
+    ]  # fmt: skip
+
+
 # --- interactions: what came of the messages we sent ----------------------------------------
 
 

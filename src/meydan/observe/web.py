@@ -19,6 +19,7 @@ from meydan.observe.query import (
     ConversationDetail,
     ConversationRow,
     CostReport,
+    EndpointRow,
     NotAllowedError,
     Overview,
     Problem,
@@ -77,5 +78,10 @@ def routes(auth: Auth, visibility: Visibility = NEED_TO_KNOW) -> APIRouter:
     def templates(person: signed_in) -> list[TemplateRow]:
         """Message templates: review status, category, quality, messages held for them."""
         return read(query.templates, person)
+
+    @router.get("/endpoints")
+    def endpoints(person: signed_in) -> list[EndpointRow]:
+        """Our numbers and email addresses: status, quality, limit, health checks."""
+        return read(query.endpoints, person)
 
     return router
