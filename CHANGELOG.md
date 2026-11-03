@@ -4,6 +4,20 @@ What changed in each release. Format: [Keep a Changelog](https://keepachangelog.
 versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor version may change
 tables or APIs; the entry says how to upgrade).
 
+## [0.13.0] - 2026-11-03
+### Added
+- Expect and ask ([docs/expect.md](docs/expect.md)): a stored expectation that an incoming
+  answer completes once (`pending -> answered | expired | cancelled | undeliverable`).
+  `expect(...)` records it (token hashed, `key` + `on_pending`: refuse / resend / allow);
+  `ask(...)` sends a template to an address (`plan_contact`) with buttons carrying the token and
+  `ref="expect:<id>"` (followed by `interactions` and the engagement scale).
+- `Expectations(tables, {kind: Handler})`: `Runtime(expect=...)` matches answers before other
+  interceptors (token, the asking message, the address's owner, in time, a valid option; one
+  answer) and sweeps overdue ones every `RuntimeConfig.expect_sweep_s` (`Handler.on_close`).
+- README: the invite recipe is now `ask` + a handler (half the code).
+### Upgrading
+- New table `meydan_expectations` (+ two partial indexes): generate a migration in your app.
+
 ## [0.12.1] - 2026-11-03
 ### Changed
 - `meydan.runtime.core` (760 lines) split by responsibility, behaviour unchanged: `types`

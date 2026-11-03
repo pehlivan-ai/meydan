@@ -44,6 +44,7 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 OUTBOX_STATUSES = ("pending", "held", "sent", "delivered", "read", "failed", "dead")
 ACTOR_KINDS = ("person", "agent", "org")
 CLAIM_STATES = ("proposed", "active")
+EXPECTATION_STATES = ("pending", "answered", "expired", "cancelled", "undeliverable")
 CLAIM_END_REASONS = ("revoked", "superseded", "dismissed", "expired")
 CONVERSATION_KINDS = ("direct", "thread", "group")
 PARTICIPANT_ROLES = ("self", "peer", "observer")
@@ -69,6 +70,7 @@ class RuntimeTables:
     access_outbox: Table
     access_state: Table
     templates: Table
+    expectations: Table
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -417,6 +419,45 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         UniqueConstraint("channel", "name", "language"),
     )
 
+    # What we're waiting for (meydan.runtime.expect): a durable promise an incoming message
+    # completes. pending -> answered | expired | cancelled | undeliverable, once.
+    expectations = Table(
+        f"{prefix}expectations",
+        metadata,
+        id_col(),
+        Column("kind", String(40), nullable=False),  # the app's name for it: "invite", "rsvp"
+        Column("channel", String(20), nullable=False),
+        # Who must answer (its owner at answer time); None: anyone may.
+        Column("identity_id", UUID(as_uuid=True), ref("identities")),
+        Column("key", String(255)),  # the app's key for "the same thing" (on_pending policy)
+        # The answer carries the token (a button payload); only its hash is kept.
+        Column("token_hash", String(64), nullable=False, unique=True),
+        Column("options", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+        Column("data", JSONB, nullable=False, server_default=text("'{}'::jsonb")),  # the app's
+        Column("state", String(20), nullable=False, server_default="pending"),
+        Column("answer", String(80)),
+        Column("answered_by", UUID(as_uuid=True), ref("actors")),
+        Column("answered_at", DateTime(timezone=True)),
+        Column("expires_at", DateTime(timezone=True), nullable=False),
+        Column("turn_id", UUID(as_uuid=True)),  # the message that asked (ask), if any
+        Column("created_by", UUID(as_uuid=True), ref("actors")),
+        now_col("created_at"),
+        now_col("updated_at"),
+        Column("closed_at", DateTime(timezone=True)),
+        CheckConstraint(_in("state", EXPECTATION_STATES), name="state"),
+    )
+    Index(
+        f"ix_{prefix}expectations_pending_key",
+        expectations.c.kind,
+        expectations.c.key,
+        postgresql_where=expectations.c.state == "pending",
+    )
+    Index(
+        f"ix_{prefix}expectations_pending_due",
+        expectations.c.expires_at,
+        postgresql_where=expectations.c.state == "pending",
+    )
+
     return RuntimeTables(
         actors=actors,
         identities=identities,
@@ -434,4 +475,5 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         access_outbox=access_outbox,
         access_state=access_state,
         templates=templates,
+        expectations=expectations,
     )

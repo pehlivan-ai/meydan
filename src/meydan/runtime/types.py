@@ -74,6 +74,7 @@ class RuntimeConfig:
     batch: int = 10
     # "Seen" and "typing…": a style name ("human", "instant", "quiet") or a Presence with numbers.
     presence: Presence | str = field(default_factory=Presence.human)
+    expect_sweep_s: float = 30.0  # how often overdue expectations are closed (Runtime(expect=))
 
 
 _STATUS_RANK = {"pending": 0, "sent": 1, "delivered": 2, "read": 3}

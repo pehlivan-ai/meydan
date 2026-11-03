@@ -297,64 +297,65 @@ app.include_router(auth.routes(), prefix="/auth")
 - The code never reaches your agent; only people with the audience's scope can confirm one.
 - The browser gets an httpOnly session cookie; codes and sessions are stored as hashes.
 
-### Invite someone with a template button
+### Ask and wait for the answer (invites, RSVPs, confirmations)
 
-Send a template whose buttons carry a token, and give the role to whoever presses it from that
-number:
+`ask` sends a template whose buttons carry a token and records what you wait for; the answer
+completes it once, after meydan's checks, and your handler says what it means. An invite:
 
 ```python
-token = secrets.token_urlsafe(16)
-planned = plan_contact(
+from datetime import timedelta
+from meydan.runtime.expect import Expectations, Handler, Replies, ask
+
+
+def accepted(conn, exp, routed):  # runs once, in the answer's transaction
+    if exp.answer == "accept":
+        assign(
+            conn,
+            runtime_tables,
+            routed.actor_id,
+            exp.data["role"],
+            exp.data["object"],
+            granted_by=exp.created_by,
+        )
+        return [Outbound.text_message("Welcome!")]
+    return [Outbound.text_message("Thanks, the invite is closed.")]
+
+
+expectations = Expectations(runtime_tables, {"invite": Handler(accepted, replies=Replies())})
+runtime = Runtime(..., expect=expectations)  # matches answers first, closes overdue ones
+
+ask(
     conn,
-    runtime_tables,
+    runtime,
+    kind="invite",
     channel="whatsapp",
-    to=Address(ENDPOINT, phone_number_id),
+    endpoint=Address(ENDPOINT, phone_number_id),
     address=tel(phone),
     name="Ada",
-)  # settles nothing: an unknown number stays unowned until WhatsApp shows whose it is
-runtime.enqueue(
-    conn,
-    channel="whatsapp",
-    conversation_id=planned.conversation_id,
-    from_number=phone_number_id,
-    to=tel(phone).value,
-    recipient_identity_id=planned.identity_id,
-    messages=[
-        Outbound.template_message(
-            "invite",
-            "en",
-            name="Ada",
-            buttons=(f"invite:accept:{token}", f"invite:decline:{token}"),
-            ref=f"invite:{invite_id}",  # delivery, reads and answers by this key (observe)
-        )
-    ],
+    options=("accept", "decline"),
+    ttl=timedelta(days=7),
+    message=lambda b: Outbound.template_message(
+        "invite", "en", name="Ada", buttons=(b["accept"], b["decline"])
+    ),
+    data={"role": "admin", "object": "instance:main"},
+    created_by=inviter,
+    key=f"admin:{phone}",
+    on_pending="refuse",  # or "resend" / "allow"
 )
-# store sha256(token), planned.identity_id, the role and an expiry in your own table
-
-
-def accept_invites(conn, message, routed):  # Runtime(intercept=[..., accept_invites])
-    if not (reply_payload(message) or "").startswith("invite:accept:"):
-        return None
-    invite = ...  # your row for that token: not expired, not answered
-    if owner(conn, runtime_tables, invite.identity_id) != routed.actor_id:
-        return Intercepted((Outbound.text_message("This invite is for another number."),))
-    assign(
-        conn,
-        runtime_tables,
-        routed.actor_id,
-        invite.role,
-        invite.object,
-        granted_by=invite.invited_by,
-    )
-    return Intercepted((Outbound.text_message("Welcome!"),))
 ```
 
-- Pressing the button from that number proves it's theirs: nobody is picked by a name they typed.
-- Someone you already know by another address (a WhatsApp username, no phone shared) is still one
-  person: the delivery receipt names their phone and BSUID together, so the number joins them
-  before they press (no duplicate actor to merge).
-- It reaches people who never wrote to you, so it works for teammates, partners and members alike.
-- Cancelling is a status on your row; a press after that gets a plain answer, not a role.
+- **Checked for you:** the token; that the press answers the message that asked; that the presser
+  owns the number it was sent to; still pending and in time; one of the options. One answer
+  only: a second press gets `Replies.answered`.
+- **Every ending is explicit** (`pending → answered | expired | cancelled | undeliverable`):
+  overdue ones expire and ones whose message couldn't be delivered close as undeliverable, and
+  `Handler.on_close` hears about both. `cancel(...)` closes one by hand.
+- **Nobody is created on a guess:** it goes to an address (`plan_contact`). Someone you already
+  know by a WhatsApp username is still one person: the delivery receipt names their phone and
+  BSUID together, so the number joins them before they press.
+- **Followed like any message:** its ref is `expect:<id>`, so `interactions` and the engagement
+  scale show delivered, seen and answered.
+- Details: [docs/expect.md](docs/expect.md).
 
 ### See how far each message got (engagement)
 
@@ -476,7 +477,7 @@ once real instances need it; the order may change with what they need.
 | Next | What | Builds on |
 |---|---|---|
 | 1 | **Booking**: offering → slot → booking (`proposed → held → confirmed → done / no_show / cancelled`), freed time offered to a waitlist in order | identities, clock |
-| 2 | **Proactive messages**: reminders and offers on a schedule, the 24-hour window with template fallback, consent per purpose. *Started:* templates with buttons that answer back (v0.8.0), template state with hold and resume (v0.9.0) | outbox, templates, clock |
+| 2 | **Proactive messages**: reminders and offers on a schedule, the 24-hour window with template fallback, consent per purpose. *Started:* templates with buttons that answer back (v0.8.0), template state with hold and resume (v0.9.0), contacts we start (v0.10.0), following a sent message (v0.11.0), the engagement scale (v0.12.0), ask and wait for the answer (v0.13.0) | outbox, templates, clock |
 | 3 | **Outcome ledger**: which conversation led to which booking, and who confirmed it | booking, conversations |
 | 4 | **Second channel** (Telegram), **handoff** to a human and back, calendar adapters | channel contract, runtime |
 | 5 | **Relations** between actors (acts for, member of), linking addresses on proof | identity claims |

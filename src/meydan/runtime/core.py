@@ -22,11 +22,15 @@ import logging
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from sqlalchemy import Connection, Engine
 
 from meydan.channels.base import Inbound, Outbound, StatusUpdate, TemplateUpdate
 from meydan.runtime.conversation import Said, transcript
+
+if TYPE_CHECKING:
+    from meydan.runtime.expect import Expectations
 from meydan.runtime.inbound import Receiver, Replied, replied_to
 from meydan.runtime.outbound import Outbox, backoff
 from meydan.runtime.presence import Presence
@@ -63,6 +67,7 @@ class Runtime:
         config: RuntimeConfig | None = None,
         on_failure: FailureReply | None = None,
         intercept: Sequence[Interceptor] = (),
+        expect: "Expectations | None" = None,
     ):
         self.engine = engine
         self.t = tables
@@ -70,7 +75,9 @@ class Runtime:
         self.handler = handler
         self.cfg = config or RuntimeConfig()
         self.presence = Presence.of(self.cfg.presence)
-        self.intercept = list(intercept)
+        # Answers to what we asked are matched before anything else sees them.
+        self.expect = expect
+        self.intercept = ([expect.intercept] if expect else []) + list(intercept)
         self.on_failure = on_failure
         self._receiver = Receiver(self)
         self._outbox = Outbox(self)
@@ -139,8 +146,18 @@ class Runtime:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(stop.wait(), timeout=self.cfg.poll_s)
 
+        async def sweep() -> None:  # close overdue expectations, at a slower pace
+            while self.expect is not None and not stop.is_set():
+                try:
+                    await asyncio.to_thread(self.expect.sweep_once, self.engine)
+                except Exception:
+                    log.exception("expectations sweep error")
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=self.cfg.expect_sweep_s)
+
         await asyncio.gather(
             loop(self.read_once, "reader"),
             loop(self.work_once, "worker"),
             loop(self.send_once, "sender"),
+            sweep(),
         )
