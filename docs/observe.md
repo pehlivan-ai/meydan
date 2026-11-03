@@ -78,6 +78,13 @@ Outbound.template_message("invite", "en", buttons=(...), ref=f"invite:{invite_id
 Meaning stays in the app: meydan says "delivered at, read at, answered with this button"; what an
 answer does (a role, a registration) is the app's interceptor.
 
+### Engagement: one ordinal scale (since v0.12)
+`observe.engagement`: `Engagement` 0 none, 1 delivered, 2 seen, 3 answered, and the pure
+function `engagement(sent_at=, delivered_at=, seen_at=, answered_at=, within=)`. `interactions`
+gives every message (by `ref`, template, `conversation_id` or `turn_id`) its `engagement`,
+`answered_at`, `answer` (`explicit` | `implicit`), `undeliverable` and the channel's `seen_bias`
+(`SEEN_BIAS`). Rules and the channel table: README > See how far each message got.
+
 ## Not here (yet)
 - Deep traces (spans per model call and tool call): an optional OpenTelemetry export (planned).
 - Message text never goes into the observe tables; it stays in the inbox/outbox.

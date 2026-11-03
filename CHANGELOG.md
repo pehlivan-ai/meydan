@@ -4,6 +4,20 @@ What changed in each release. Format: [Keep a Changelog](https://keepachangelog.
 versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor version may change
 tables or APIs; the entry says how to upgrade).
 
+## [0.12.0] - 2026-11-03
+### Added
+- Engagement: one ordinal scale for every message we send, on every channel
+  (`observe.engagement`): 0 none, 1 delivered, 2 seen, 3 answered; `engagement(..., within=)`
+  derives the level from kept times at any horizon (nothing stored). Undeliverable messages are
+  off the scale. `SEEN_BIAS` says how a channel's "seen" leans (WhatsApp `under`, email `over`).
+- `interactions(...)` covers any message, not only templates: by `conversation_id` or
+  `turn_id` too, with `engagement`, `answered_at`, `answer` (explicit: it points at the
+  message; implicit: they wrote before our next message), `undeliverable`, `seen_bias`, and a
+  `within` horizon.
+- README: the engagement table (levels per channel).
+### Upgrading
+- No table changes.
+
 ## [0.11.0] - 2026-11-02
 ### Added
 - Following a message we sent ([docs/observe.md](docs/observe.md)):

@@ -356,6 +356,40 @@ def accept_invites(conn, message, routed):  # Runtime(intercept=[..., accept_inv
 - It reaches people who never wrote to you, so it works for teammates, partners and members alike.
 - Cancelling is a status on your row; a press after that gets a plain answer, not a role.
 
+### See how far each message got (engagement)
+
+Every message you send, a template or your agent's reply, climbs one scale. It's the same on
+every channel, so it can be compared across them and used as a label (e.g. feedback for an
+agent's replies):
+
+| Level | Meaning | WhatsApp | Email | SMS / push (later) |
+|---|---|---|---|---|
+| **0** none | sent, nothing came back | — | — | — |
+| **1** delivered | it reached their device or mailbox | `delivered` | accepted by their server (provider's delivery event) | carrier delivery report / push delivered |
+| **2** seen | they saw it | `read` | opened (tracking pixel) | — / push opened |
+| **3** answered | they answered it | a button or quoted reply (`context.id`), or writing before our next message | `In-Reply-To` / `References`, or writing before our next message | writing before our next message |
+
+```python
+from datetime import timedelta
+from meydan.observe.query import interactions
+
+for m in interactions(conn, tables, who, turn_id=turn_id, within=timedelta(hours=24)):
+    m.engagement, m.answer, m.seen_bias  # 0..3, "explicit" | "implicit" | None, "under" | "over"
+```
+
+- Each level implies the ones below: an answer counts as seen even when there is no read receipt.
+- **Nothing is stored:** the level comes from the times meydan keeps, so any horizon can be asked
+  for later (`within=`): "seen within an hour" and "answered within a day" from the same data.
+- **Explicit or implicit:** an answer that points at the message (a button, a quote, an email
+  reply) is explicit; the person writing before our next message is implicit and belongs to the
+  whole reply (all its bubbles).
+- **Undeliverable is off the scale:** a message the channel couldn't deliver is the system's
+  failure, not the person's behaviour; it has `undeliverable=True` and no level.
+- **"Seen" leans differently per channel** (`seen_bias`): WhatsApp read receipts can be turned
+  off (`under`: missing, never false); email opens fire on image prefetch (`over`: can be false).
+- What the answer said (accepted, declined, a question) is a separate axis: the scale says how far
+  it got, not whether it went well.
+
 ### An admin service next to your app
 
 Build a second FastAPI app from the same parts, on its own host and cookie:

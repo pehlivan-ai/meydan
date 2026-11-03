@@ -10,12 +10,14 @@ table. The default is `Visibility.need_to_know()`.
 import uuid
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from typing import Literal
 
 from pydantic import BaseModel
-from sqlalchemy import Connection, and_, case, func, insert, select, text
+from sqlalchemy import Connection, and_, case, func, insert, or_, select, text
 from sqlalchemy.dialects.postgresql import distinct_on
 
 from meydan.auth.core import Principal
+from meydan.observe.engagement import SEEN_BIAS, engagement
 from meydan.runtime.tables import RuntimeTables
 from meydan.visibility import Rule, Visibility, mask
 
@@ -494,8 +496,14 @@ class Interaction(BaseModel):
     queued_at: datetime
     sent_at: datetime | None
     delivered_at: datetime | None
-    read_at: datetime | None
-    answers: list[Answer]
+    read_at: datetime | None  # "seen": WhatsApp read, email opened
+    answers: list[Answer]  # explicit answers: they point at this message
+    # The ordinal scale (observe.engagement): 0 none, 1 delivered, 2 seen, 3 answered.
+    answered_at: datetime | None  # the first answer, explicit or implicit (database clock)
+    answer: Literal["explicit", "implicit"] | None
+    engagement: int | None  # None: not sent yet, or undeliverable (not on the scale)
+    undeliverable: bool  # the channel couldn't deliver it: the system's failure, not theirs
+    seen_bias: str | None  # how this channel's "seen" leans: exact | under | over
 
 
 ANSWER_BUTTONS = ("button", "interactive")  # their text is our own button title
@@ -509,21 +517,58 @@ def interactions(
     ref: str | None = None,
     ref_prefix: str | None = None,
     template: str | None = None,
+    conversation_id: uuid.UUID | None = None,
+    turn_id: uuid.UUID | None = None,
+    within: timedelta | None = None,
     limit: int = 50,
     visibility: Visibility = NEED_TO_KNOW,
 ) -> list[Interaction]:
-    """Messages we sent and what came of them: queued, sent, delivered, read, and the answers
-    that point at them (button presses, quoted replies). Look up by the app's `ref` (exact or
-    by prefix, e.g. "invite:") or by template name; newest first."""
+    """Messages we sent and what came of them: queued, sent, delivered, seen, answered, and the
+    answers that point at them (button presses, quoted replies). Any message: a template by the
+    app's `ref` (exact or prefix, e.g. "invite:") or name, or an agent's replies by conversation
+    or turn; newest first. `within` counts only what happened that long after sending (a label
+    horizon). An implicit answer is the person writing before our next message (whole turn)."""
     _need(who, visibility.operations)
     o, i = t.outbox, t.inbox
-    q = select(o).order_by(o.c.created_at.desc(), o.c.id.desc()).limit(limit)
+    later = o.alias("later")
+    next_out = (  # when our next message (another turn) went out in the same conversation
+        select(func.min(later.c.sent_at))
+        .where(
+            later.c.conversation_id == o.c.conversation_id,
+            later.c.sent_at > o.c.sent_at,
+            later.c.turn_id.is_distinct_from(o.c.turn_id),
+        )
+        .scalar_subquery()
+    )
+    explicit = (
+        select(func.min(i.c.received_at))
+        .where(i.c.channel == o.c.channel, i.c.reply_to == o.c.channel_message_id)
+        .scalar_subquery()
+    )
+    implicit = (
+        select(func.min(i.c.received_at))
+        .where(
+            i.c.conversation_id == o.c.conversation_id,
+            i.c.received_at > o.c.sent_at,
+            or_(next_out.is_(None), i.c.received_at < next_out),
+        )
+        .scalar_subquery()
+    )
+    q = (
+        select(o, explicit.label("explicit_at"), implicit.label("implicit_at"))
+        .order_by(o.c.created_at.desc(), o.c.id.desc())
+        .limit(limit)
+    )
     if ref is not None:
         q = q.where(o.c.ref == ref)
     if ref_prefix is not None:
         q = q.where(o.c.ref.startswith(ref_prefix, autoescape=True))
     if template is not None:
         q = q.where(o.c.message["template"].astext == template)
+    if conversation_id is not None:
+        q = q.where(o.c.conversation_id == conversation_id)
+    if turn_id is not None:
+        q = q.where(o.c.turn_id == turn_id)
     sent = conn.execute(q).all()
     ids = [r.channel_message_id for r in sent if r.channel_message_id]
     answers: dict[str, list[Answer]] = {}
@@ -544,16 +589,28 @@ def interactions(
         _audit(conn, t, who, visibility.message_text, "read:messages")
     if sent:
         _audit(conn, t, who, visibility.addresses, "read:addresses")
-    return [
-        Interaction(
-            outbox_id=r.id, ref=r.ref, conversation_id=r.conversation_id,
-            template=r.message.get("template"), to=_shown(who, visibility.addresses, r.to),
-            status=r.status, error=r.last_error, queued_at=r.created_at, sent_at=r.sent_at,
-            delivered_at=r.delivered_at, read_at=r.read_at,
-            answers=answers.get(r.channel_message_id or "", []),
-        )
-        for r in sent
-    ]  # fmt: skip
+    out = []
+    for r in sent:
+        answered_at = r.explicit_at or r.implicit_at
+        undeliverable = r.status in ("failed", "dead") and r.delivered_at is None
+        level = None if undeliverable else engagement(
+            sent_at=r.sent_at, delivered_at=r.delivered_at, seen_at=r.read_at,
+            answered_at=answered_at, within=within,
+        )  # fmt: skip
+        out.append(
+            Interaction(
+                outbox_id=r.id, ref=r.ref, conversation_id=r.conversation_id,
+                template=r.message.get("template"), to=_shown(who, visibility.addresses, r.to),
+                status=r.status, error=r.last_error, queued_at=r.created_at, sent_at=r.sent_at,
+                delivered_at=r.delivered_at, read_at=r.read_at,
+                answers=answers.get(r.channel_message_id or "", []),
+                answered_at=answered_at,
+                answer="explicit" if r.explicit_at else "implicit" if r.implicit_at else None,
+                engagement=None if level is None else int(level),
+                undeliverable=undeliverable, seen_bias=SEEN_BIAS.get(r.channel),
+            )
+        )  # fmt: skip
+    return out
 
 
 # --- problems --------------------------------------------------------------------------------
