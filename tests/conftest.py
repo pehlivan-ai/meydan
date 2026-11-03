@@ -1,6 +1,7 @@
 """Shared fixtures: a real Postgres 18 (advisory locks, SKIP LOCKED, uuidv7) and a fake channel.
 
 Set MEYDAN_TEST_DATABASE_URL, or have a local Postgres with a `meydan_test` database.
+MEYDAN_TEST_REQUIRE=1 (CI) fails instead of skipping when a test service is missing.
 Test data is fake (numbers, ids): this is a public repository.
 """
 
@@ -17,6 +18,16 @@ URL = os.environ.get(
     "MEYDAN_TEST_DATABASE_URL", "postgresql+psycopg://meydan:meydan@localhost:5432/meydan_test"
 )
 T0 = datetime(2026, 10, 27, 12, 0, tzinfo=UTC)
+# CI sets this: a missing test service (Postgres, OpenFGA) fails the run instead of skipping its
+# tests, so a green run always means they ran.
+REQUIRE = os.environ.get("MEYDAN_TEST_REQUIRE") == "1"
+
+
+def unavailable(reason: str) -> None:
+    """Skip, or fail when the services are required (CI)."""
+    if REQUIRE:
+        pytest.fail(f"required test service unavailable: {reason}")
+    pytest.skip(reason)
 
 
 @pytest.fixture
@@ -26,7 +37,7 @@ def db():
         with engine.connect() as c:
             c.execute(text("select uuidv7()"))
     except Exception as e:
-        pytest.skip(f"no Postgres 18 test database: {e}")
+        unavailable(f"no Postgres 18 test database: {e}")
     md = MetaData()
     tables = define_tables(md)
     md.drop_all(engine)

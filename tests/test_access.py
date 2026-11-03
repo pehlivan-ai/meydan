@@ -10,6 +10,7 @@ from pathlib import Path
 
 import httpx
 import pytest
+from conftest import unavailable
 from sqlalchemy import insert, select
 
 from meydan.access import Access, AccessConfig, assign, may_sign_in, roles_of, unassign
@@ -23,7 +24,7 @@ async def access(db):
     try:
         httpx.get(f"{URL}/healthz", timeout=2).raise_for_status()
     except Exception as e:
-        pytest.skip(f"no OpenFGA server: {e}")
+        unavailable(f"no OpenFGA server: {e}")
     engine, t = db
     config = AccessConfig(
         api_url=URL,

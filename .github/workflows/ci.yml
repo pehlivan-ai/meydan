@@ -22,8 +22,16 @@ jobs:
         options: --health-cmd "pg_isready -U meydan" --health-interval 2s --health-retries 20
     env:
       MEYDAN_TEST_DATABASE_URL: postgresql+psycopg://meydan:meydan@localhost:5432/meydan_test
+      MEYDAN_TEST_OPENFGA_URL: http://127.0.0.1:18080
+      MEYDAN_TEST_REQUIRE: "1"  # a missing service fails the run: no silently skipped tests
     steps:
       - uses: actions/checkout@v4
+      # OpenFGA needs the `run` argument, which `services:` can't pass: start it as a step.
+      - name: OpenFGA
+        run: |
+          docker run -d --name openfga -p 127.0.0.1:18080:8080 openfga/openfga:v1.22.0 run
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:18080/healthz && exit 0; sleep 1; done
+          docker logs openfga; exit 1
       - uses: astral-sh/setup-uv@v6
       - run: uv sync --all-extras --locked
       - run: uv run ruff check .
