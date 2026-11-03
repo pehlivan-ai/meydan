@@ -409,9 +409,9 @@ Then keep their health with the app (status, quality, limit, display name review
 MX, SPF, DKIM, DMARC), read as checks (`ok` / `warn` / `fail`):
 
 ```python
-await endpoints.sync(engine, tables, whatsapp_cloud, account=waba_id)        # numbers
+await endpoints.sync(engine, tables, whatsapp_cloud, account=waba_id)  # numbers
 endpoints.record(conn, tables, dns_health("hello@example.com", selectors=["google"]))
-query.endpoints(conn, tables, who)                                            # GET /observe/endpoints
+query.endpoints(conn, tables, who)  # GET /observe/endpoints
 ```
 
 Details: [docs/endpoints.md](docs/endpoints.md).

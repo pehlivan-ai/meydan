@@ -57,8 +57,8 @@ python -m meydan.cli numbers list --account WABA_ID                  # with its 
 from meydan.channels.email import dns_health
 from meydan.runtime import endpoints
 
-await endpoints.sync(engine, tables, whatsapp_cloud, account=waba_id)    # at startup, periodically
-with engine.begin() as conn:                                              # e.g. daily
+await endpoints.sync(engine, tables, whatsapp_cloud, account=waba_id)  # at startup, periodically
+with engine.begin() as conn:  # e.g. daily
     endpoints.record(conn, tables, dns_health("hello@example.com", selectors=["google"]))
 ```
 
