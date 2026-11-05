@@ -161,6 +161,37 @@ async def test_template_buttons_carry_payloads_and_come_back():
     assert pressed[0].text == "Accept" and reply_payload(pressed[0]) == "accept:t1"
 
 
+async def test_send_location_pin():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"messages": [{"id": "wamid.L"}]})
+
+    pin = Outbound.location_message(51.5, -0.12, place="Court One", address="1 Main St", ref="c:1")
+    assert await cloud(handler).send("222", "905550000001", pin) == "wamid.L"
+    assert seen[0]["type"] == "location"
+    assert seen[0]["location"] == {
+        "latitude": 51.5,
+        "longitude": -0.12,
+        "name": "Court One",
+        "address": "1 Main St",
+    }
+    assert pin.text == "Court One\n1 Main St"  # what transcripts show
+    assert Outbound.from_payload(pin.to_payload()) == pin  # survives the outbox
+    bare = Outbound.location_message(51.5, -0.12)
+    await cloud(handler).send("222", "905550000001", bare)
+    assert seen[1]["location"] == {"latitude": 51.5, "longitude": -0.12}
+    with pytest.raises(ValueError):
+        Outbound.location_message(91.0, -0.12)
+
+
+def test_old_outbox_payloads_still_load():
+    old = {"kind": "text", "text": "hi", "template": None, "language": None, "params": {},
+           "buttons": [], "ref": None, "otp": None}  # fmt: skip
+    assert Outbound.from_payload(old) == Outbound.text_message("hi")
+
+
 async def test_send_to_bsuid_uses_recipient():
     seen = []
 

@@ -100,9 +100,10 @@ class EndpointUpdate:
 
 @dataclass(frozen=True)
 class Outbound:
-    """Something to send in a conversation: free-form text or an approved template."""
+    """Something to send in a conversation: free-form text, an approved template or a location
+    (a map pin)."""
 
-    kind: Literal["text", "template"]
+    kind: Literal["text", "template", "location"]
     text: str = ""
     template: str | None = None
     language: str | None = None
@@ -116,6 +117,11 @@ class Outbound:
     # A one-time code for an authentication template (WhatsApp: body {{1}} + copy-code button).
     # The outbox blanks it once sent: the code isn't kept in plain text after it left.
     otp: str | None = None
+    # A location (WGS 84) with the place's name and address shown under the pin.
+    lat: float | None = None
+    lng: float | None = None
+    place: str | None = None
+    address: str | None = None
 
     @classmethod
     def text_message(cls, text: str, *, ref: str | None = None) -> "Outbound":
@@ -149,6 +155,25 @@ class Outbound:
         """An authentication template carrying a one-time code (e.g. a sign-in code)."""
         return cls(kind="template", template=template, language=language, otp=code, ref=ref)
 
+    @classmethod
+    def location_message(
+        cls,
+        lat: float,
+        lng: float,
+        *,
+        place: str | None = None,
+        address: str | None = None,
+        ref: str | None = None,
+    ) -> "Outbound":
+        """A map pin. `text` keeps the place and address, so transcripts (what an agent reads as
+        history) show what was sent."""
+        if not (-90 <= lat <= 90 and -180 <= lng <= 180):
+            raise ValueError(f"not a WGS 84 coordinate: {lat}, {lng}")
+        text = "\n".join(x for x in (place, address) if x)
+        return cls(
+            kind="location", text=text, lat=lat, lng=lng, place=place, address=address, ref=ref
+        )
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
@@ -159,6 +184,10 @@ class Outbound:
             "buttons": list(self.buttons),
             "ref": self.ref,
             "otp": self.otp,
+            "lat": self.lat,
+            "lng": self.lng,
+            "place": self.place,
+            "address": self.address,
         }
 
     @classmethod

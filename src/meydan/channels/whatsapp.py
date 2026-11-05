@@ -503,6 +503,11 @@ class WhatsAppCloud:
         body |= {"recipient": to} if is_bsuid(to) else {"to": to.lstrip("+")}
         if message.kind == "text":
             body |= {"type": "text", "text": {"body": message.text}}
+        elif message.kind == "location":
+            location: dict[str, Any] = {"latitude": message.lat, "longitude": message.lng}
+            location |= {"name": message.place} if message.place else {}
+            location |= {"address": message.address} if message.address else {}
+            body |= {"type": "location", "location": location}
         else:
             params = [
                 {"type": "text", "parameter_name": k, "text": v} for k, v in message.params.items()
