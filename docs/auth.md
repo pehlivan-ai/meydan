@@ -18,6 +18,49 @@ to remember, nothing stored that would be useful if leaked.
 It works inside the channel's normal rules (the person writes first), so it needs no message
 templates.
 
+## Sign in by a code we send (since v0.15.0)
+The way most apps do it: type your number, get a code on WhatsApp, type it in.
+
+1. `POST /auth/sign-in/code {"address": "+90 555 …"}`: the app reads the address
+   (`parse_address`), and if its owner may sign in here (`allowed`, default: holds the audience
+   scope) and hasn't had 3 codes in 15 minutes, sends a 6-digit code (`send_code`). **The answer
+   is the same either way** (`{"expires_in_s": 300}`), so the form tells nobody who has access.
+   The browser gets its secret in an httpOnly cookie.
+2. The code goes **where the person talks to us** (`core.send_code`): from the number and to the
+   address they last wrote from, else from `default_from` to the typed address. It is an
+   authentication template (WhatsApp: fixed text, a copy-code button; `Outbound.code_message`),
+   with `ref="signin:<id>"`. The outbox blanks the code once it has left.
+3. `POST /auth/sign-in/verify {"code": "123456"}` → `signed_in` (session cookie), `wrong`, or
+   `expired` (time, used, 5 wrong tries, or cancelled).
+4. **"I didn't request a code"** (WhatsApp's button on authentication templates, beta): the
+   interceptor finds the sign-in by the message it answers, cancels it, calls `on_reject` (e.g.
+   audit it, tell the owners) and replies `rejected_reply`.
+
+A code we sent typed into the chat does nothing: it is only good in the browser that asked.
+
+```python
+auth = Auth(
+    engine,
+    tables,
+    AuthConfig(audience="ops"),
+    parse_address=lambda typed: ...,  # e.g. libphonenumber -> Address("tel", e164)
+    send_code=lambda conn, code: send_code(
+        conn,
+        runtime,
+        code,
+        template="signin_code",
+        language="tr",
+        channel="whatsapp",
+        default_from=Address("wa-pnid", phone_number_id),
+    ),
+)
+runtime = Runtime(..., intercept=[sign_in_interceptor(tables, on_reject=..., rejected_reply="...")])
+```
+
+Why not `expect`: a sign-in proves control of an address, a typed code checked in the browser;
+an expectation waits for a person's answer to a question. The one answer a sent code can get
+("I didn't request a code") is matched by the same parts `expect` uses (`ref`, `replied_to`).
+
 ## Sessions and scopes
 - **Sessions:** a random token; browsers keep it in an httpOnly, Secure, SameSite=Lax, host-only
   cookie, other clients send `Authorization: Bearer <token>`. Stored only as a SHA-256 hash;
@@ -54,6 +97,8 @@ def costs(person: SignedIn) -> CostReport: ...
 | Default | Why |
 |---|---|
 | codes live 5 minutes, one session per code | a leaked code is useless soon and only once |
+| sent codes: 6 digits, 5 wrong tries, 3 sends per address per 15 minutes, salted per browser | guessing is hopeless; a code alone (without the browser) is worth nothing |
+| the code request answers the same for anyone | the form doesn't reveal who has access |
 | only actors with the audience scope can confirm | deny by default; strangers' codes are ordinary messages |
 | no special answer to wrong or expired codes | nothing to probe |
 | codes, browser secrets, tokens stored only as hashes | a database leak doesn't give sessions away |

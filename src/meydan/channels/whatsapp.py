@@ -514,6 +514,12 @@ class WhatsAppCloud:
             components: list[dict[str, Any]] = []
             if params:
                 components.append({"type": "body", "parameters": params})
+            if message.otp:  # authentication template: the code in the body and its button
+                code = [{"type": "text", "text": message.otp}]
+                components += [
+                    {"type": "body", "parameters": code},
+                    {"type": "button", "sub_type": "url", "index": "0", "parameters": code},
+                ]
             for index, payload in enumerate(message.buttons):
                 components.append(
                     {

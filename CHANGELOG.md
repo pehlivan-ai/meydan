@@ -4,6 +4,23 @@ What changed in each release. Format: [Keep a Changelog](https://keepachangelog.
 versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor version may change
 tables or APIs; the entry says how to upgrade).
 
+## [0.15.0] - 2026-11-05
+### Added
+- Sign in by a code we send ([docs/auth.md](docs/auth.md)): `start_code_sign_in` (same answer
+  whether or not a code goes out; 3 sends per address per 15 minutes), `send_code` (an
+  authentication template where the person talks to us, `ref="signin:<id>"`), `verify_code`
+  (6 digits, 5 tries, salted per browser), `reject`. Routes `POST /auth/sign-in/code` and
+  `POST /auth/sign-in/verify` when `Auth(parse_address=, send_code=)` are given.
+- `sign_in_interceptor(on_reject=, rejected_reply=)`: WhatsApp's "I didn't request a code" button
+  cancels the sign-in it answers.
+- `Outbound.code_message` / `Outbound.otp`: authentication templates (WhatsApp: the code in the
+  body and the copy-code button). The outbox blanks the code once sent (or dead).
+### Changed
+- Codes sent to the chat confirm only "received" sign-ins (a code we sent is typed in the browser).
+### Upgrading
+- `meydan_sign_ins`: new columns `method` (default "received"), `attempts`, `rejected_at` and an
+  index on (identity_id, created_at): generate a migration in your app.
+
 ## [0.14.0] - 2026-11-03
 ### Added
 - Endpoints ([docs/endpoints.md](docs/endpoints.md)): our own numbers and email addresses with

@@ -113,6 +113,9 @@ class Outbound:
     # The app's own key for what this message is about (e.g. "invite:<id>"): its delivery,
     # reads and replies can then be looked up by it (`observe.query.interactions`).
     ref: str | None = None
+    # A one-time code for an authentication template (WhatsApp: body {{1}} + copy-code button).
+    # The outbox blanks it once sent: the code isn't kept in plain text after it left.
+    otp: str | None = None
 
     @classmethod
     def text_message(cls, text: str, *, ref: str | None = None) -> "Outbound":
@@ -139,6 +142,13 @@ class Outbound:
             ref=ref,
         )
 
+    @classmethod
+    def code_message(
+        cls, template: str, language: str, code: str, *, ref: str | None = None
+    ) -> "Outbound":
+        """An authentication template carrying a one-time code (e.g. a sign-in code)."""
+        return cls(kind="template", template=template, language=language, otp=code, ref=ref)
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
@@ -148,6 +158,7 @@ class Outbound:
             "params": self.params,
             "buttons": list(self.buttons),
             "ref": self.ref,
+            "otp": self.otp,
         }
 
     @classmethod
