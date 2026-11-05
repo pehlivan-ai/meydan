@@ -504,7 +504,8 @@ class WhatsAppCloud:
         if message.kind == "text":
             body |= {"type": "text", "text": {"body": message.text}}
         elif message.kind == "location":
-            location: dict[str, Any] = {"latitude": message.lat, "longitude": message.lng}
+            # Strings, as in Meta's reference (Location messages: latitude/longitude String).
+            location: dict[str, Any] = {"latitude": str(message.lat), "longitude": str(message.lng)}
             location |= {"name": message.place} if message.place else {}
             location |= {"address": message.address} if message.address else {}
             body |= {"type": "location", "location": location}

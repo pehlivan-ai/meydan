@@ -172,8 +172,8 @@ async def test_send_location_pin():
     assert await cloud(handler).send("222", "905550000001", pin) == "wamid.L"
     assert seen[0]["type"] == "location"
     assert seen[0]["location"] == {
-        "latitude": 51.5,
-        "longitude": -0.12,
+        "latitude": "51.5",
+        "longitude": "-0.12",
         "name": "Court One",
         "address": "1 Main St",
     }
@@ -181,7 +181,7 @@ async def test_send_location_pin():
     assert Outbound.from_payload(pin.to_payload()) == pin  # survives the outbox
     bare = Outbound.location_message(51.5, -0.12)
     await cloud(handler).send("222", "905550000001", bare)
-    assert seen[1]["location"] == {"latitude": 51.5, "longitude": -0.12}
+    assert seen[1]["location"] == {"latitude": "51.5", "longitude": "-0.12"}
     with pytest.raises(ValueError):
         Outbound.location_message(91.0, -0.12)
 
