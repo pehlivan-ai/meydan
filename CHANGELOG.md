@@ -4,6 +4,14 @@ What changed in each release. Format: [Keep a Changelog](https://keepachangelog.
 versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor version may change
 tables or APIs; the entry says how to upgrade).
 
+## [0.16.0] - 2026-11-05
+### Added
+- `Outbound.location_message(lat, lng, place=, address=)`: a map pin (WhatsApp `type: location`).
+  Its `text` holds the place and address, so transcripts show what was sent. Coordinates outside
+  WGS 84 raise `ValueError`.
+### Upgrading
+- Nothing to migrate: the outbox stores messages as JSON, and older payloads still load.
+
 ## [0.15.0] - 2026-11-05
 ### Added
 - Sign in by a code we send ([docs/auth.md](docs/auth.md)): `start_code_sign_in` (same answer

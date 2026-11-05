@@ -160,6 +160,9 @@ async def reply(turn: Turn) -> list[Outbound]:
     return [Outbound.text_message(f"got: {turn.text}")]
 ```
 
+A reply is a list of bubbles: `Outbound.text_message`, `Outbound.template_message` (outside the
+24 h window) or `Outbound.location_message(lat, lng, place=, address=)` (a map pin).
+
 Tools follow the `meydan.tools` contract: the person comes from the channel, never from the model.
 
 ### 3. Wire the parts in your app
