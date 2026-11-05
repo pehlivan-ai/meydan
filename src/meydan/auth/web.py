@@ -4,6 +4,9 @@
                 sign_in_link=lambda code: f"https://wa.me/<number>?text={code}")
     app.include_router(auth.routes(), prefix="/auth")
 
+With `parse_address` and `send_code`, the browser can also ask for a code to be sent to an address
+(POST /sign-in/code) and type it back (POST /sign-in/verify): see `core.start_code_sign_in`.
+
     SignedIn = Annotated[Principal, Depends(auth.signed_in)]
 
     @app.get("/costs", dependencies=[Depends(auth.require("costs:read"))])
@@ -25,10 +28,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import APIKeyCookie, HTTPAuthorizationCredentials, HTTPBearer
 from pydantic import BaseModel
-from sqlalchemy import Engine
+from sqlalchemy import Connection, Engine
 
 from meydan.auth import core
-from meydan.auth.core import AuthConfig, Principal
+from meydan.auth.core import AuthConfig, CodeToSend, Principal, SignInRule
+from meydan.channels.base import Address
 from meydan.runtime.tables import RuntimeTables
 
 SAFE_METHODS = {"GET", "HEAD", "OPTIONS"}
@@ -41,7 +45,20 @@ class SignInStarted(BaseModel):
 
 
 class SignInStatus(BaseModel):
-    status: str  # "pending" | "signed_in" | "expired"
+    status: str  # "pending" | "signed_in" | "expired"; verify also: "wrong"
+
+
+class CodeRequest(BaseModel):
+    address: str  # as the person typed it (e.g. a phone number); `parse_address` normalizes it
+
+
+class CodeSent(BaseModel):
+    # Always the same answer: a code went out only if this address may sign in here.
+    expires_in_s: int
+
+
+class CodeTyped(BaseModel):
+    code: str
 
 
 class Auth:
@@ -57,6 +74,12 @@ class Auth:
         trusted_origins: tuple[str, ...] = (),  # extra origins allowed to send cookie requests
         # Extra scopes per request, e.g. meydan.access.Access.scopes (roles -> scopes).
         resolve_scopes: Callable[[uuid.UUID], Awaitable[frozenset[str]]] | None = None,
+        # Sent codes (POST /sign-in/code, /sign-in/verify): how a typed address is read (None:
+        # not an address, 422), and how a code goes out (in the same transaction, e.g. through
+        # core.send_code). Who may get one: `allowed` (default: holds the audience scope).
+        parse_address: Callable[[str], Address | None] | None = None,
+        send_code: Callable[[Connection, CodeToSend], object] | None = None,
+        allowed: SignInRule | None = None,
     ):
         self.engine = engine
         self.t = tables
@@ -66,6 +89,9 @@ class Auth:
         self.secure = secure_cookies
         self.trusted_origins = trusted_origins
         self.resolve_scopes = resolve_scopes
+        self.parse_address = parse_address
+        self.send_code = send_code
+        self.allowed = allowed
         self._cookie = APIKeyCookie(name=cookie_name, auto_error=False)
         self._bearer = HTTPBearer(auto_error=False)
         self.signed_in = self._signed_in_dependency()
@@ -98,6 +124,41 @@ class Auth:
                 self._set_cookie(response, self.cookie_name, token, self.cfg.session_ttl_s)
                 response.delete_cookie(sign_in_cookie)
             return SignInStatus(status=state)
+
+        if self.parse_address is not None and self.send_code is not None:
+            parse, send = self.parse_address, self.send_code
+
+            @router.post("/sign-in/code")
+            def request_code(body: CodeRequest, response: Response) -> CodeSent:
+                """Send a sign-in code to this address if it may sign in here (same answer
+                either way)."""
+                address = parse(body.address)
+                if address is None:
+                    raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Not an address.")
+                with self.engine.begin() as conn:
+                    started = core.start_code_sign_in(conn, self.t, self.cfg, address, self.allowed)
+                    if started.send is not None:
+                        send(conn, started.send)
+                self._set_cookie(
+                    response, sign_in_cookie, started.browser_secret, started.expires_in_s
+                )
+                return CodeSent(expires_in_s=started.expires_in_s)
+
+            @router.post("/sign-in/verify")
+            def verify(body: CodeTyped, request: Request, response: Response) -> SignInStatus:
+                """Type the code that was sent; sets the session cookie when it matches."""
+                secret = request.cookies.get(sign_in_cookie)
+                if not secret:
+                    return SignInStatus(status="expired")
+                label = request.headers.get("user-agent")
+                with self.engine.begin() as conn:
+                    state, token = core.verify_code(
+                        conn, self.t, self.cfg, secret, body.code, label
+                    )
+                if token:
+                    self._set_cookie(response, self.cookie_name, token, self.cfg.session_ttl_s)
+                    response.delete_cookie(sign_in_cookie)
+                return SignInStatus(status=state)
 
         @router.post("/sign-out", status_code=status.HTTP_204_NO_CONTENT)
         def sign_out(

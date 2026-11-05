@@ -143,15 +143,21 @@ class Outbox(_Part):
         except SendError as e:
             if not e.retryable or attempts >= self.cfg.max_send_attempts:
                 log.warning("dead letter %s: %s", row["id"], e.reason)
-                return base | {"status": "dead", "last_error": e.reason}
+                dead = base | {"status": "dead", "last_error": e.reason}
+                if row["message"].get("otp"):
+                    dead["message"] = {**row["message"], "otp": "******"}
+                return dead
             wait = self.rt._backoff(attempts, e.min_wait_s)
             return base | {
                 "last_error": e.reason,
                 "next_attempt_at": _clock() + timedelta(seconds=wait),
             }
-        return base | {
+        sent = base | {
             "status": "sent",
             "channel_message_id": wamid,
             "sent_at": _clock(),
             "last_error": None,
         }
+        if row["message"].get("otp"):  # a one-time code isn't kept once it has left
+            sent["message"] = {**row["message"], "otp": "******"}
+        return sent

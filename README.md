@@ -296,6 +296,9 @@ app.include_router(auth.routes(), prefix="/auth")
 - No passwords and no templates: the person writes first, inside WhatsApp's normal rules.
 - The code never reaches your agent; only people with the audience's scope can confirm one.
 - The browser gets an httpOnly session cookie; codes and sessions are stored as hashes.
+- Or the familiar way: type your number, get a code on WhatsApp (an authentication template,
+  sent where you talk to the app), type it in; "I didn't request a code" cancels it.
+  Pass `parse_address` and `send_code` to `Auth`: [docs/auth.md](docs/auth.md).
 
 ### Ask and wait for the answer (invites, RSVPs, confirmations)
 

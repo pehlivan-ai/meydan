@@ -311,7 +311,10 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         f"{prefix}sign_ins",
         metadata,
         id_col(),
-        Column("code_hash", String(64), nullable=False, unique=True),  # what the person sends
+        # "received": the person sends us the code shown in the browser; "sent": we send a code
+        # to their address and they type it into the browser (meydan.auth, docs/auth.md).
+        Column("method", String(10), nullable=False, server_default="received"),
+        Column("code_hash", String(64), nullable=False, unique=True),  # sent: salted per browser
         Column("browser_hash", String(64), nullable=False, unique=True),  # what the browser holds
         Column("audience", String(40), nullable=False),  # e.g. "ops": the scope a signer must hold
         now_col("created_at"),
@@ -320,7 +323,10 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         Column("actor_id", UUID(as_uuid=True), ref("actors")),  # who confirmed it
         Column("identity_id", UUID(as_uuid=True), ref("identities")),  # from which address
         Column("claimed_at", DateTime(timezone=True)),  # when the browser got its session
+        Column("attempts", Integer, nullable=False, server_default="0"),  # wrong codes typed
+        Column("rejected_at", DateTime(timezone=True)),  # "I didn't request a code"
     )
+    Index(f"ix_{prefix}sign_ins_identity", sign_ins.c.identity_id, sign_ins.c.created_at)
 
     sessions = Table(
         f"{prefix}sessions",
