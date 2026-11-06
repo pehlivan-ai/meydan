@@ -5,7 +5,8 @@
     app.include_router(auth.routes(), prefix="/auth")
 
 With `parse_address` and `send_code`, the browser can also ask for a code to be sent to an address
-(POST /sign-in/code) and type it back (POST /sign-in/verify): see `core.start_code_sign_in`.
+(POST /sign-in/code) and type it back (POST /sign-in/verify): see `core.start_code_sign_in`. Once
+that is the way in, `received=False` drops the code the person sends themselves (POST/GET /sign-in).
 
     SignedIn = Annotated[Principal, Depends(auth.signed_in)]
 
@@ -80,6 +81,9 @@ class Auth:
         parse_address: Callable[[str], Address | None] | None = None,
         send_code: Callable[[Connection, CodeToSend], object] | None = None,
         allowed: SignInRule | None = None,
+        # The code the person sends us (POST /sign-in, polled by GET /sign-in). False: not
+        # offered (e.g. only sent codes), so those routes don't exist.
+        received: bool = True,
     ):
         self.engine = engine
         self.t = tables
@@ -92,6 +96,7 @@ class Auth:
         self.parse_address = parse_address
         self.send_code = send_code
         self.allowed = allowed
+        self.received = received
         self._cookie = APIKeyCookie(name=cookie_name, auto_error=False)
         self._bearer = HTTPBearer(auto_error=False)
         self.signed_in = self._signed_in_dependency()
@@ -102,28 +107,8 @@ class Auth:
         router = APIRouter(tags=["auth"])
         sign_in_cookie = f"{self.cookie_name}_sign_in"
 
-        @router.post("/sign-in")
-        def start(response: Response) -> SignInStarted:
-            """Start a sign-in: returns a code for the person to send from their phone."""
-            with self.engine.begin() as conn:
-                started = core.start_sign_in(conn, self.t, self.cfg)
-            self._set_cookie(response, sign_in_cookie, started.browser_secret, started.expires_in_s)
-            link = self.sign_in_link(started.code) if self.sign_in_link else None
-            return SignInStarted(code=started.code, link=link, expires_in_s=started.expires_in_s)
-
-        @router.get("/sign-in")
-        def poll(request: Request, response: Response) -> SignInStatus:
-            """Ask whether the code has been sent yet; sets the session cookie once it has."""
-            secret = request.cookies.get(sign_in_cookie)
-            if not secret:
-                return SignInStatus(status="expired")
-            label = request.headers.get("user-agent")
-            with self.engine.begin() as conn:
-                state, token = core.claim(conn, self.t, self.cfg, secret, label)
-            if token:
-                self._set_cookie(response, self.cookie_name, token, self.cfg.session_ttl_s)
-                response.delete_cookie(sign_in_cookie)
-            return SignInStatus(status=state)
+        if self.received:
+            self._received_routes(router, sign_in_cookie)
 
         if self.parse_address is not None and self.send_code is not None:
             parse, send = self.parse_address, self.send_code
@@ -174,6 +159,30 @@ class Auth:
             response.delete_cookie(self.cookie_name)
 
         return router
+
+    def _received_routes(self, router: APIRouter, sign_in_cookie: str) -> None:
+        @router.post("/sign-in")
+        def start(response: Response) -> SignInStarted:
+            """Start a sign-in: returns a code for the person to send from their phone."""
+            with self.engine.begin() as conn:
+                started = core.start_sign_in(conn, self.t, self.cfg)
+            self._set_cookie(response, sign_in_cookie, started.browser_secret, started.expires_in_s)
+            link = self.sign_in_link(started.code) if self.sign_in_link else None
+            return SignInStarted(code=started.code, link=link, expires_in_s=started.expires_in_s)
+
+        @router.get("/sign-in")
+        def poll(request: Request, response: Response) -> SignInStatus:
+            """Ask whether the code has been sent yet; sets the session cookie once it has."""
+            secret = request.cookies.get(sign_in_cookie)
+            if not secret:
+                return SignInStatus(status="expired")
+            label = request.headers.get("user-agent")
+            with self.engine.begin() as conn:
+                state, token = core.claim(conn, self.t, self.cfg, secret, label)
+            if token:
+                self._set_cookie(response, self.cookie_name, token, self.cfg.session_ttl_s)
+                response.delete_cookie(sign_in_cookie)
+            return SignInStatus(status=state)
 
     # --- dependencies ---------------------------------------------------------------------
 

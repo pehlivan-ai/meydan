@@ -19,7 +19,9 @@ It works inside the channel's normal rules (the person writes first), so it need
 templates.
 
 ## Sign in by a code we send (since v0.15.0)
-The way most apps do it: type your number, get a code on WhatsApp, type it in.
+The way most apps do it: type your number, get a code on WhatsApp, type it in. When this is the
+only way in, `Auth(received=False)` (since v0.17.0) leaves out the code people send themselves
+(`POST/GET /sign-in`).
 
 1. `POST /auth/sign-in/code {"address": "+90 555 …"}`: the app reads the address
    (`parse_address`), and if its owner may sign in here (`allowed`, default: holds the audience
