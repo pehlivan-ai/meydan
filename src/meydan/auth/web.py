@@ -5,8 +5,8 @@
     app.include_router(auth.routes(), prefix="/auth")
 
 With `parse_address` and `send_code`, the browser can also ask for a code to be sent to an address
-(POST /sign-in/code) and type it back (POST /sign-in/verify): see `core.start_code_sign_in`. Once
-that is the way in, `received=False` drops the code the person sends themselves (POST/GET /sign-in).
+(POST /sign-in/code) and type it back (POST /sign-in/verify): see `core.start_code_sign_in`. Both
+ways are on by default; `received=False` turns off the self-sent code (POST/GET /sign-in).
 
     SignedIn = Annotated[Principal, Depends(auth.signed_in)]
 
@@ -81,8 +81,8 @@ class Auth:
         parse_address: Callable[[str], Address | None] | None = None,
         send_code: Callable[[Connection, CodeToSend], object] | None = None,
         allowed: SignInRule | None = None,
-        # The code the person sends us (POST /sign-in, polled by GET /sign-in). False: not
-        # offered (e.g. only sent codes), so those routes don't exist.
+        # The code the person sends us (POST /sign-in, polled by GET /sign-in). On by default;
+        # False turns it off (e.g. an app that wants only sent codes).
         received: bool = True,
     ):
         self.engine = engine
