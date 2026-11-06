@@ -6,9 +6,9 @@ tables or APIs; the entry says how to upgrade).
 
 ## [0.17.0] - 2026-11-06
 ### Added
-- `Auth(received=False)`: no sign-in by a code the person sends themselves; `POST/GET /sign-in`
-  are not mounted, so an app whose way in is sent codes (`/sign-in/code`, `/sign-in/verify`)
-  offers only that. Default `True`: nothing changes for existing apps.
+- `Auth(received=...)`: an option for the sign-in by a code the person sends themselves
+  (`POST/GET /sign-in`). Default `True`: both ways in, as before. An app that wants only sent codes
+  (`/sign-in/code`, `/sign-in/verify`) can set it to `False`.
 ### Upgrading
 - Nothing to do.
 
