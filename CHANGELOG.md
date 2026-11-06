@@ -4,6 +4,14 @@ What changed in each release. Format: [Keep a Changelog](https://keepachangelog.
 versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor version may change
 tables or APIs; the entry says how to upgrade).
 
+## [0.17.0] - 2026-11-06
+### Added
+- `Auth(received=False)`: no sign-in by a code the person sends themselves; `POST/GET /sign-in`
+  are not mounted, so an app whose way in is sent codes (`/sign-in/code`, `/sign-in/verify`)
+  offers only that. Default `True`: nothing changes for existing apps.
+### Upgrading
+- Nothing to do.
+
 ## [0.16.0] - 2026-11-05
 ### Added
 - `Outbound.location_message(lat, lng, place=, address=)`: a map pin (WhatsApp `type: location`).

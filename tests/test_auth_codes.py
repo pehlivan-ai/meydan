@@ -181,3 +181,18 @@ async def test_whatsapp_sends_the_code_in_the_body_and_the_copy_button():
         {"type": "button", "sub_type": "url", "index": "0",
          "parameters": [{"type": "text", "text": "123456"}]},
     ]  # fmt: skip
+
+
+def test_without_received_codes_only_sent_codes_are_offered(db):
+    engine, t = db
+    auth = Auth(
+        engine, t, AuthConfig(audience="ops"), secure_cookies=False, received=False,
+        parse_address=lambda s: Address("tel", s) if s.startswith("+") else None,
+        send_code=lambda conn, code: None,
+    )  # fmt: skip
+    app = FastAPI()
+    app.include_router(auth.routes(), prefix="/auth")
+    client = TestClient(app)
+    assert client.post("/auth/sign-in").status_code == 404
+    assert client.get("/auth/sign-in").status_code == 404
+    assert client.post("/auth/sign-in/code", json={"address": "+15550009999"}).status_code == 200
