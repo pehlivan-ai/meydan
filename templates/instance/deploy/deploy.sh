@@ -30,7 +30,9 @@ curl -fsS -H "Metadata-Flavor: Google" \
   docker login -u oauth2accesstoken --password-stdin "https://$REGISTRY" >/dev/null
 
 pin() {
-  printf 'services:\n  app:\n    image: %s\n' "$1" > compose.override.yaml
+  # The migration step runs the same image as the app.
+  printf 'services:\n  migrate:\n    image: %s\n  app:\n    image: %s\n' "$1" "$1" \
+    > compose.override.yaml
 }
 
 previous=$(cat .deploy/current 2>/dev/null || true)
@@ -53,6 +55,8 @@ docker compose logs --tail 50 app || true
 if [ -n "$previous" ]; then
   log "rolling back to $previous"
   pin "$previous"
-  docker compose up -d --no-build --wait --wait-timeout 120 app
+  # --no-deps: no migration on the way back; the database stays as the new release left it
+  # (migrations are backward compatible with the previous release).
+  docker compose up -d --no-build --no-deps --wait --wait-timeout 120 app
 fi
 exit 1

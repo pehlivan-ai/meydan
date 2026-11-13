@@ -6,6 +6,21 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.19.0] - 2026-11-13
+### Added
+- `templates/instance` is a small working app: webhook, app factory with the runtime loops,
+  settings, Alembic with the first migration, `python -m app.migrate` as a rollback-safe deploy
+  step, a `Dockerfile`, tests, and `try.py`, which talks to the app through a fake channel.
+- Docs: `docs/getting-started.md` (for app developers and for work on meydan) and
+  `docs/bring-up.md` (the accounts, keys and addresses an app on WhatsApp needs, in order).
+### Changed
+- `templates/instance`: the compose stack has a `migrate` step the app waits for;
+  `deploy/deploy.sh` pins it to the release's image and skips it on rollback.
+- meydan's own `pytest` collects only `tests/` (the template's tests run in a copy of it).
+### Upgrading
+- Nothing to migrate. An instance made from the older template keeps working; to take the
+  migration step, copy `app/migrate.py`, the `migrate` service and the `pin` function.
+
 ## [0.18.0] - 2026-11-13
 ### Added
 - `meydan.channels.telegram`: Telegram as a second channel. `Telegram([tokens], render=)` sends

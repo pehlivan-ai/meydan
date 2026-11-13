@@ -5,7 +5,7 @@ needs, [open an issue](https://github.com/pehlivan-ai/meydan/issues/new/choose) 
 app"): what the people using it need, what you looked for, and how you work around it today. That
 is how meydan decides what becomes a part.
 
-If you do write code:
+If you do write code (setup, step by step: [docs/getting-started.md](docs/getting-started.md#work-on-meydan)):
 
 - Python 3.12, managed with uv. `uv sync --all-extras` to set up.
 - Ruff is the linter and formatter; code isn't done until `uv run ruff check .` and

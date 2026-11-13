@@ -122,7 +122,7 @@ Latest: **v0.9.0**, templates the sender knows: held while pending or paused, se
 | `meydan.llm` | Provider-agnostic models from spec strings (`openrouter:…`, `vertex:…@location`), fallback chain, per-provider concurrency limit with bounded queue, one retry layer (Retry-After, jittered exponential backoff), timeouts | available (`meydan[llm]`) |
 | `meydan.clock` | One place that converts time: instance zone, injectable clock, localized date text, date windows at their precision ("Aralık 2026"), a day calendar for agent context | available |
 | `meydan.tools` | Framework-agnostic tool contract: `(ToolContext, **params) -> model`, identity from the channel, `ToolError` for business rules | available |
-| `templates/instance` | Docker Compose stack (Postgres 18, app, Caddy), CI/CD workflow, digest-pinned deploy with health check and rollback, one-time GCP setup | available |
+| `templates/instance` | A small working app (webhook, runtime loops, Alembic, Dockerfile, a fake-channel `try.py`) with its Docker Compose stack (Postgres 18, migrate, app, Caddy), CI/CD workflow, digest-pinned deploy with health check and rollback, one-time GCP setup | available |
 | `meydan.runtime` | Inbox (idempotent on message id) → identities (actors, addresses, evidence-based claims; [docs/identity.md](docs/identity.md)) → worker, one turn per conversation at a time (advisory lock, debounce, resequencing, poison-message guard) → transactional outbox → sender (per-conversation order, bubble pacing, jittered retries, dead letter, receipt correlation). Postgres 18. One `Runtime` over parts by responsibility: `inbound` (receive, interceptors, receipts, `replied_to`), `outbound` (enqueue, sender), `worker` (seen, turns), `conversation` (`transcript`), `identity`, `templates` | available (`meydan[runtime]`) |
 | `meydan.channels.whatsapp` | WhatsApp Cloud API: signature check, webhook parsing (text, buttons, interactive, receipts) routed by `phone_number_id`, sending text/templates from the number written to, typing indicator, retryable vs permanent errors | available (`meydan[runtime]`) |
 | `meydan.channels.telegram` | Telegram Bot API: bots as endpoints, long polling in, text and inline buttons out, templates rendered by the app, retryable vs permanent errors ([docs/telegram.md](docs/telegram.md)). Text, buttons and presses tried against Telegram | available (`meydan[runtime]`), new |
@@ -138,6 +138,9 @@ Latest: **v0.9.0**, templates the sender knows: held while pending or paused, se
 </details>
 
 ## Quick start
+
+Step by step, for app developers and for work on meydan itself:
+[docs/getting-started.md](docs/getting-started.md). The idea in short:
 
 meydan gives you parts, not a finished app. You write what only your app knows; meydan handles
 what every messaging agent needs. You wire the parts together in one place in your app.
@@ -234,7 +237,9 @@ Browser ─▶ auth (session) ─▶ access (roles → scopes) ─▶ visibility
 
 ### Next steps
 
+- What to get before an app can talk (the bring-up list): [docs/bring-up.md](docs/bring-up.md)
 - Who is who: [docs/identity.md](docs/identity.md)
+- A second channel, with nothing to apply for: [docs/telegram.md](docs/telegram.md)
 - Seen and typing: [docs/presence.md](docs/presence.md)
 - Turn records and costs: [docs/observe.md](docs/observe.md)
 - Sign-in: [docs/auth.md](docs/auth.md)
@@ -491,7 +496,9 @@ model = llm.get_model()  # hand this to a Pydantic AI Agent
 ## Setting up an instance
 
 1. Copy `templates/instance/` into your app repo (rename `gitignore` to `.gitignore` or merge it).
-2. Your app serves `GET /health` on port 8000 and has a `Dockerfile`.
+   It is a small working app: webhook, runtime loops, migrations, `Dockerfile`, and a `try.py`
+   that talks to it without WhatsApp ([docs/getting-started.md](docs/getting-started.md)).
+2. Write your app in `app/agent.py`; keep `GET /health` on port 8000.
 3. Create a VM with Docker Engine + Compose, clone your repo to the instance directory, put
    secrets in `.env` there.
 4. Run `scripts/gcp-setup.sh` once (see its header), then fill the `env:` block of

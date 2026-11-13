@@ -1,0 +1,27 @@
+[project]
+name = "app"
+version = "0.1.0"
+description = "A meydan instance."
+requires-python = ">=3.12"
+dependencies = [
+    "meydan[api,runtime]",  # add `llm` when a model answers
+    "uvicorn>=0.34",
+    "alembic>=1.14",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+# Pin a release; move the tag when you take a newer meydan (read its CHANGELOG "Upgrading").
+meydan = { git = "https://github.com/pehlivan-ai/meydan", rev = "v0.17.0" }
+
+[dependency-groups]
+dev = ["pytest>=8", "ruff>=0.17.2"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
