@@ -1,6 +1,6 @@
 [project]
 name = "meydan"
-version = "0.18.0"
+version = "0.19.0"
 description = "Primitives for running instances of personal and planning agents that coordinate people, one-to-one and in groups."
 readme = "README.md"
 license = "Apache-2.0"
@@ -62,3 +62,5 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "N"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
+# The instance template has its own tests; they run in a copy of it, not here.
+testpaths = ["tests"]

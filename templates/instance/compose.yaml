@@ -17,6 +17,19 @@ services:
       timeout: 3s
       retries: 10
 
+  # Migrations as their own step (python -m app.migrate, the app image): the app starts only
+  # once it has finished. A rollback finds the database ahead and leaves it alone.
+  migrate:
+    build: .
+    image: ${APP_IMAGE:-app:local}
+    command: ["python", "-m", "app.migrate"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://app:${POSTGRES_PASSWORD}@db:5432/app
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
   app:
     build: .
     # Locally built from source. On the VM, deploy/deploy.sh pins the CI-built image by digest
@@ -25,6 +38,10 @@ services:
     restart: unless-stopped
     environment:
       DATABASE_URL: postgresql+psycopg://app:${POSTGRES_PASSWORD}@db:5432/app
+      META_APP_SECRET: ${META_APP_SECRET:-}
+      WHATSAPP_VERIFY_TOKEN: ${WHATSAPP_VERIFY_TOKEN:-}
+      WHATSAPP_ACCESS_TOKEN: ${WHATSAPP_ACCESS_TOKEN:-}
+      WHATSAPP_BUSINESS_ACCOUNT_ID: ${WHATSAPP_BUSINESS_ACCOUNT_ID:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       MEYDAN_LLM_MODEL: ${MEYDAN_LLM_MODEL:-}
     healthcheck:
@@ -34,8 +51,8 @@ services:
       start_period: 20s
       retries: 5
     depends_on:
-      db:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   caddy:
     image: caddy:2
