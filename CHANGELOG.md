@@ -6,6 +6,15 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.20.0] - 2026-11-13
+### Added
+- `meydan.agent`: the Pydantic AI adapter. `as_tool(fn, context)` exposes a `meydan.tools`
+  tool to an agent (the person comes from the context, a `ToolError` becomes a result the
+  model can explain); `history(lines)` turns a transcript into the messages a model is given
+  before a turn. Both were in an instance until a second one needed them.
+### Upgrading
+- Nothing to migrate.
+
 ## [0.19.0] - 2026-11-13
 ### Added
 - `templates/instance` is a small working app: webhook, app factory with the runtime loops,
