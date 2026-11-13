@@ -4,6 +4,18 @@ What changed in each release. Format: [Keep a Changelog](https://keepachangelog.
 versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor version may change
 tables or APIs; the entry says how to upgrade).
 
+## [Unreleased]
+
+## [0.18.0] - 2026-11-13
+### Added
+- `meydan.channels.telegram`: Telegram as a second channel. `Telegram([tokens], render=)` sends
+  text, locations and template messages (rendered by the app into text and inline buttons);
+  `parse_messages` turns updates into `Inbound`, a button press in the same shape as WhatsApp's;
+  `poll` reads a bot by long polling and moves on only once a batch is stored
+  ([docs/telegram.md](docs/telegram.md)). Tested against a fake Bot API, and text, buttons and presses against Telegram.
+### Upgrading
+- Nothing to migrate. An app that does not use Telegram is unaffected.
+
 ## [0.17.0] - 2026-11-06
 ### Added
 - `Auth(received=...)`: an option for the sign-in by a code the person sends themselves
