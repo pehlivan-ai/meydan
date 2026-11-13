@@ -892,7 +892,7 @@ wheels = [
 
 [[package]]
 name = "meydan"
-version = "0.20.0"
+version = "0.21.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
@@ -905,6 +905,10 @@ access = [
 ]
 api = [
     { name = "fastapi" },
+]
+booking = [
+    { name = "psycopg", extra = ["binary"] },
+    { name = "sqlalchemy" },
 ]
 email = [
     { name = "dnspython" },
@@ -937,14 +941,16 @@ requires-dist = [
     { name = "httpx", marker = "extra == 'runtime'", specifier = ">=0.28" },
     { name = "openai", marker = "extra == 'llm'", specifier = ">=1.80" },
     { name = "openfga-sdk", marker = "extra == 'access'", specifier = ">=0.10.5" },
+    { name = "psycopg", extras = ["binary"], marker = "extra == 'booking'", specifier = ">=3.2" },
     { name = "psycopg", extras = ["binary"], marker = "extra == 'runtime'", specifier = ">=3.2" },
     { name = "pydantic", specifier = ">=2" },
     { name = "pydantic-ai-slim", extras = ["google", "openrouter"], marker = "extra == 'llm'", specifier = ">=2.61" },
     { name = "pydantic-settings", specifier = ">=2" },
+    { name = "sqlalchemy", marker = "extra == 'booking'", specifier = ">=2.1" },
     { name = "sqlalchemy", marker = "extra == 'runtime'", specifier = ">=2.1" },
     { name = "tenacity", marker = "extra == 'llm'", specifier = ">=9" },
 ]
-provides-extras = ["runtime", "api", "llm", "access", "email"]
+provides-extras = ["booking", "runtime", "api", "llm", "access", "email"]
 
 [package.metadata.requires-dev]
 dev = [
