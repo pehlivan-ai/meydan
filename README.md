@@ -123,6 +123,7 @@ Latest: **v0.9.0**, templates the sender knows: held while pending or paused, se
 | `meydan.clock` | One place that converts time: instance zone, injectable clock, localized date text, date windows at their precision ("Aralık 2026"), a day calendar for agent context | available |
 | `meydan.tools` | Framework-agnostic tool contract: `(ToolContext, **params) -> model`, identity from the channel, `ToolError` for business rules | available |
 | `meydan.agent` | Pydantic AI adapter: a `meydan.tools` tool as an agent's tool (`as_tool`), a conversation's transcript as its message history (`history`) | available (`meydan[llm,runtime]`), new |
+| `meydan.booking` | **A primitive: take it only if the app books time.** Appointments: staff, services, shifts, bookings that cannot overlap (a database constraint), closures, a waiting list; hold → confirm or cancel, free gaps, a freed time offered to who waits, in order, under an offer policy (lead time, reply window, quiet hours, a cap per person); every function takes `now`, so a month can be simulated in seconds ([docs/booking.md](docs/booking.md)) | available as an optional primitive (`meydan[booking]`, needs `btree_gist`), new |
 | `templates/instance` | A small working app (webhook, runtime loops, Alembic, Dockerfile, a fake-channel `try.py`) with its Docker Compose stack (Postgres 18, migrate, app, Caddy), CI/CD workflow, digest-pinned deploy with health check and rollback, one-time GCP setup | available |
 | `meydan.runtime` | Inbox (idempotent on message id) → identities (actors, addresses, evidence-based claims; [docs/identity.md](docs/identity.md)) → worker, one turn per conversation at a time (advisory lock, debounce, resequencing, poison-message guard) → transactional outbox → sender (per-conversation order, bubble pacing, jittered retries, dead letter, receipt correlation). Postgres 18. One `Runtime` over parts by responsibility: `inbound` (receive, interceptors, receipts, `replied_to`), `outbound` (enqueue, sender), `worker` (seen, turns), `conversation` (`transcript`), `identity`, `templates` | available (`meydan[runtime]`) |
 | `meydan.channels.whatsapp` | WhatsApp Cloud API: signature check, webhook parsing (text, buttons, interactive, receipts) routed by `phone_number_id`, sending text/templates from the number written to, typing indicator, retryable vs permanent errors | available (`meydan[runtime]`) |
@@ -509,6 +510,48 @@ model = llm.get_model()  # hand this to a Pydantic AI Agent
 
 Keep migrations backward compatible with the previous release, or rollback can't work.
 
+## What you can build today
+
+Status as of 0.21.0 (November 2026). One private pilot, an appointment desk for a small service business, was
+built on these parts and run in a three-day simulation; what it needed and meydan lacked is listed below.
+
+**You can build: a message desk for a small service business.**
+
+| The desk does this | With |
+|---|---|
+| People write over WhatsApp or Telegram and get an answer; each conversation is handled one turn at a time, and no message is lost or answered twice | `meydan.runtime`, `meydan.channels.whatsapp`, `meydan.channels.telegram` |
+| A conversational agent that acts through tools; who is asking comes from the channel, not from the model | `meydan.tools`, `meydan.agent`, `meydan.llm` |
+| If the app books time: a time is held, the owner confirms with a button, nobody is double-booked; a cancelled time is offered to who waits | the `meydan.booking` primitive, ask-and-wait (`expect`, [docs/expect.md](docs/expect.md)) |
+| Messages that need a template outside the 24-hour window are sent, held or given up according to the template's state | `meydan.runtime.templates` |
+| The owner and the team sign in by sending a code, and see only what they may | `meydan.auth`, `meydan.access`, `meydan.visibility` |
+| You see every turn, its cost and where it failed | `meydan.observe` |
+| It runs on one small machine and deploys by digest with rollback | `templates/instance` |
+
+**How to build one**
+
+1. Start from `templates/instance`: a working app with its tables, webhook, loops and a `try.py` that talks to it
+   through a fake channel ([docs/getting-started.md](docs/getting-started.md)).
+2. Pick the channel: Telegram needs only a bot token ([docs/telegram.md](docs/telegram.md)); WhatsApp needs a
+   business number and approved templates ([docs/bring-up.md](docs/bring-up.md)).
+3. Add your own tables next to meydan's. Primitives are optional parts an app takes when it needs them: for
+   appointments, `meydan.booking` ([docs/booking.md](docs/booking.md)). An app that books nothing leaves it out.
+4. Write what the agent may do as tools (`meydan.tools`) and hand them to an agent (`meydan.agent`). Keep every
+   rule in the tool or below it, not in the prompt.
+5. For anything a person must decide, ask with buttons and wait (`expect`): the answer arrives as a turn.
+6. Read `meydan.observe` before and after each change.
+
+**What the pilot had to build itself, and is not in meydan yet**
+
+- A check on the agent: a second reading of what the person asked, a confidence threshold per tool by its cost,
+  and a guard that refuses a reply claiming something the tools did not do.
+- A second agent for the owner and the team (closing time, recording appointments, changing rules).
+- A journal of what happened in the business's own terms, and a panel over it.
+- A simulated world (a running clock, a busy owner, clients played by a model) to test rules before people meet them.
+- A clock that can be injected into the runtime: timed questions follow the real clock today.
+
+**Not there**: reminders and other proactive messages on a schedule, the outcome ledger, handoff to a human,
+calendar adapters, group planning, and hosting many instances on shared infrastructure.
+
 ## Roadmap
 
 The order things are expected to land in, and what each builds on. A module moves into meydan
@@ -516,7 +559,7 @@ once real instances need it; the order may change with what they need.
 
 | Next | What | Builds on |
 |---|---|---|
-| 1 | **Booking**: offering → slot → booking (`proposed → held → confirmed → done / no_show / cancelled`), freed time offered to a waitlist in order | identities, clock |
+| landed | **Booking** (0.21.0, `meydan.booking`, an optional primitive): hold → confirm / cancel / expire, attended and no-show as states, freed time offered to a waitlist in order under a policy. Not yet: an offering → slot layer above it | identities, clock |
 | 2 | **Proactive messages**: reminders and offers on a schedule, the 24-hour window with template fallback, consent per purpose. *Started:* templates with buttons that answer back (v0.8.0), template state with hold and resume (v0.9.0), contacts we start (v0.10.0), following a sent message (v0.11.0), the engagement scale (v0.12.0), ask and wait for the answer (v0.13.0), our own numbers and addresses (v0.14.0) | outbox, templates, clock |
 | 3 | **Outcome ledger**: which conversation led to which booking, and who confirmed it | booking, conversations |
 | 4 | **Handoff** to a human and back, calendar adapters. *Landed:* the second channel, Telegram (0.18.0) | channel contract, runtime |

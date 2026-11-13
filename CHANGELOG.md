@@ -6,6 +6,19 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.21.0] - 2026-11-13
+### Added
+- `meydan.booking`: the first **primitive**, an optional part an app takes only if it needs it (`meydan[booking]`).
+  Appointments: tables for staff, services, shifts, bookings (no two bookings of one member overlap: an exclusion
+  constraint, needs `btree_gist`), closures, a waiting list and a ledger of filled gaps; `core` holds, confirms,
+  cancels, finds free gaps and offers a freed time to who waits; `policy.OfferPolicy` says when and how such an
+  offer may be made (lead time, reply window, quiet hours, a cap per person). It knows nothing about channels or
+  agents. Promoted from the lab after a pilot used it; tested against Postgres ([docs/booking.md](docs/booking.md)).
+- README: "What you can build today": what an app can do with these parts, how to build one, and what a pilot had
+  to build itself.
+### Upgrading
+- Nothing to migrate. An app that does not import `meydan.booking` is unaffected.
+
 ## [0.20.0] - 2026-11-13
 ### Added
 - `meydan.agent`: the Pydantic AI adapter. `as_tool(fn, context)` exposes a `meydan.tools`
