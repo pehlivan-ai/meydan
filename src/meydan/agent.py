@@ -125,6 +125,7 @@ class AgentHandler:
         deps: Callable[[Any], Any] = lambda turn: turn,
         clock: Clock | None = None,
         now: Callable[[Any], Sequence[str]] | None = None,
+        said: Callable[[Any], str] | None = None,
         messages: Callable[[Any, Any], list[Outbound]] | None = None,
         history_lines: int = 30,
         timeout_s: float = 45,
@@ -132,7 +133,7 @@ class AgentHandler:
     ):
         self.agent = agent
         self.engine, self.tables = engine, tables
-        self.deps, self.clock, self.now = deps, clock, now
+        self.deps, self.clock, self.now, self.said = deps, clock, now, said
         self._messages = messages
         self.history_lines, self.timeout_s, self.since = history_lines, timeout_s, since
 
@@ -143,7 +144,7 @@ class AgentHandler:
             lines.append(f"Now ({self.clock.zone}): {self.clock.format_datetime(self.clock.now())}")
         if self.now is not None:
             lines.extend(self.now(turn))
-        text = turn.text or NO_TEXT
+        text = self.said(turn) if self.said is not None else (turn.text or NO_TEXT)
         return f"{text}\n\n(" + "\n".join(lines) + ")" if lines else text
 
     def messages(self, output: Any, turn: Any) -> list[Outbound]:
@@ -163,21 +164,27 @@ class AgentHandler:
         start = self.since(turn) if self.since is not None else None
         return history([line for line in lines if start is None or line.at > start])
 
-    async def run(self, turn: Any, history: Sequence[ModelMessage] = ()) -> Any:
+    async def run(
+        self, turn: Any, history: Sequence[ModelMessage] = (), prompt: str | None = None
+    ) -> Any:
         """One run of the agent for this turn, with a time limit; records its model calls."""
         from meydan import observe  # noqa: PLC0415
 
+        prompt = self.prompt(turn) if prompt is None else prompt
         async with asyncio.timeout(self.timeout_s):
             result = await self.agent.run(
-                self.prompt(turn), deps=self.deps(turn), message_history=list(history)
+                prompt, deps=self.deps(turn), message_history=list(history)
             )
         observe.record_run(result)
         return result
 
     async def __call__(self, turn: Any) -> list[Outbound]:
+        # `now`, `said` and `messages` are the app's and may read its database: they run off the
+        # event loop, like the history, so one slow query never holds every other conversation.
         past = await asyncio.to_thread(self.history, turn)
-        result = await self.run(turn, past)
-        return self.messages(result.output, turn)
+        prompt = await asyncio.to_thread(self.prompt, turn)
+        result = await self.run(turn, past, prompt)
+        return await asyncio.to_thread(self.messages, result.output, turn)
 
 
 def handler(agent: Any, **options: Any) -> AgentHandler:
@@ -186,6 +193,8 @@ def handler(agent: Any, **options: Any) -> AgentHandler:
     Options: `engine` and `tables` (history from the transcript; left out: none), `deps(turn)`
     (what the agent's tools are given; left out: the turn), `clock` (the time now, at the end of
     each message), `now(turn)` (more lines that are true only now, read on every turn),
-    `messages(output, turn)` (what a reply sends; left out: its bubbles), `history_lines`,
-    `timeout_s`, `since(turn)` (no history before this moment)."""
+    `said(turn)` (what the model reads of the person's messages; left out: their text, or a note
+    that there was none), `messages(output, turn)` (what a reply sends; left out: its bubbles),
+    `history_lines`, `timeout_s`, `since(turn)` (no history before this moment). `now`, `said` and
+    `messages` may read the app's database: they run off the event loop."""
     return AgentHandler(agent, **options)

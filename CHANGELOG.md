@@ -6,6 +6,20 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.24.0] - 2026-11-16
+### Added
+- `handler(agent, said=)`: what the model reads of the person's messages, from the turn. Left out,
+  it is their text, or a note that there was none, as before. An app that gets contact cards, media
+  or locations says what they are (`[Contact card: Ece]`) instead of the model reading a name as a
+  message. A first step of [#18](https://github.com/pehlivan-ai/meydan/issues/18).
+### Changed
+- `handler`: `now(turn)`, `said(turn)` and `messages(output, turn)` run off the event loop, like the
+  history. They are the app's and may read its database; one slow query no longer holds every
+  other conversation's turn. `run(turn, history, prompt=)` takes a prompt made beforehand.
+### Upgrading
+- Nothing to migrate. A hook that relied on running on the event loop (calling `asyncio` from
+  inside it) must not: they now run in a thread.
+
 ## [0.23.0] - 2026-11-16
 ### Changed
 - Postgres 16 and 17 are supported, not only 18: the oldest supported version is now 16. Ids are made by meydan (`meydan.ids.uuid7`: a time-ordered

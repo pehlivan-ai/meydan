@@ -2,6 +2,7 @@
 No model is called: Pydantic AI's test model calls every tool once."""
 
 import asyncio
+import threading
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
@@ -144,3 +145,29 @@ async def test_an_app_says_what_a_reply_sends_and_what_the_tools_are_given():
     out = await reply(a_turn("nerede"))
     assert [m.kind for m in out] == ["text", "location"]
     assert reply.prompt(a_turn("")) == "(a message with no text: a photo, a voice note)"
+
+
+async def test_an_app_says_what_the_model_reads_of_a_message_that_is_not_text():
+    agent = Agent(answers("Gördüm."), output_type=Reply)
+    reply = handler(agent, said=lambda turn: f"[Contact card: {turn.text}]")
+    await reply(a_turn("Ece"))
+    assert answers.seen["prompt"] == "[Contact card: Ece]"
+
+
+async def test_the_apps_hooks_run_off_the_event_loop():
+    """`now` and `messages` may read the app's database: they never run on the event loop."""
+    main = threading.get_ident()
+    seen = {}
+
+    def now(turn):
+        seen["now"] = threading.get_ident()
+        return []
+
+    def messages(out, turn):
+        seen["messages"] = threading.get_ident()
+        return out.outbound()
+
+    agent = Agent(answers("Tamam."), output_type=Reply)
+    await handler(agent, now=now, messages=messages)(a_turn("selam"))
+    assert seen["now"] != main
+    assert seen["messages"] != main
