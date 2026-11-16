@@ -54,6 +54,7 @@ jobs:
       - run: uv sync --locked
       - run: uv run alembic upgrade head
       - run: uv run alembic check
+      - run: uv run pytest   # on their own database, app_test (tests/conftest.py)
 
   stack:
     # The whole Compose stack builds and becomes healthy.

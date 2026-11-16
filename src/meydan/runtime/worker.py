@@ -9,12 +9,13 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Connection, func, select, update
+from sqlalchemy import Connection, func, or_, select, update
 from sqlalchemy.dialects.postgresql import distinct_on
 
 from meydan.channels.base import Address, Inbound, Outbound
 from meydan.observe.context import TurnContext, turn_scope
 from meydan.observe.record import write_turn
+from meydan.runtime.failures import Failure, classify
 from meydan.runtime.types import Turn, _clock, _Part
 
 log = logging.getLogger("meydan.runtime")
@@ -33,6 +34,7 @@ class Worker(_Part):
                 i.c.read_at.is_(None),
                 i.c.processed_at.is_(None),  # answered messages need no separate "seen"
                 i.c.received_at <= _clock() - timedelta(seconds=after),
+                *self._ours(),
             )
             .order_by(i.c.conversation_id, i.c.sent_at.desc(), i.c.id.desc())
             .ext(distinct_on(i.c.conversation_id))
@@ -40,6 +42,10 @@ class Worker(_Part):
         )
         with self.engine.connect() as conn:
             return [dict(r) for r in conn.execute(q).mappings()]
+
+    def _ours(self) -> list:
+        """Only this runtime's channel's messages (`Runtime.serves`); every one without a name."""
+        return [self.t.inbox.c.channel == self.serves] if self.serves else []
 
     def _set_read(self, conversation_id: uuid.UUID, up_to: datetime) -> None:
         i = self.t.inbox
@@ -72,7 +78,12 @@ class Worker(_Part):
         now = _clock()
         q = (
             select(i.c.conversation_id)
-            .where(i.c.processed_at.is_(None))
+            .where(
+                i.c.processed_at.is_(None),
+                # A turn put off waits; a new message from the person tries it again at once.
+                or_(i.c.retry_at.is_(None), i.c.retry_at <= now),
+                *self._ours(),
+            )
             .group_by(i.c.conversation_id)
             .having(
                 (func.max(i.c.received_at) <= now - timedelta(seconds=self.cfg.debounce_s))
@@ -235,30 +246,54 @@ class Worker(_Part):
         ctx: TurnContext,
         started_at: datetime,
     ) -> None:
+        """Count the attempt, then try again later, a little later, or give up, by what failed
+        (`meydan.runtime.failures`). Only `retry` failures count toward `max_turn_attempts`: an
+        hour of a provider being down is not a poison message."""
         i = self.t.inbox
+        kind, group, retry_after = classify(exc)
         with self.engine.begin() as conn:
-            attempts = conn.scalars(
+            attempts, first, now = conn.execute(
+                select(func.max(i.c.attempts) + 1, func.min(i.c.received_at), _clock()).where(
+                    i.c.id.in_(ids)
+                )
+            ).one()
+            window = self.rules.of(turn.channel).reply_window
+            horizon = first + (window or timedelta(seconds=self.cfg.give_up_after_s))
+            waits = self.cfg.retry_waits_s
+            if group == "transient":
+                wait = max(waits[min(attempts, len(waits)) - 1], retry_after or 0)
+                retry_at = now + timedelta(seconds=wait)
+                gave_up = retry_at >= horizon
+            elif group == "retry":
+                retry_at = now + timedelta(seconds=min(self.cfg.retry_wait_s * attempts, 60))
+                gave_up = attempts >= self.cfg.max_turn_attempts
+            else:  # human, permanent
+                retry_at, gave_up = None, True
+            failure = Failure(kind, group, exc, attempts, gave_up, retry_after)
+            error = f"{kind}: {exc!r}"[:500]
+            conn.execute(
                 update(i)
                 .where(i.c.id.in_(ids))
-                .values(attempts=i.c.attempts + 1, error=repr(exc)[:500])
-                .returning(i.c.attempts)
-            ).all()
-            gave_up = bool(attempts) and max(attempts) >= self.cfg.max_turn_attempts
+                .values(attempts=attempts, error=error, retry_at=None if gave_up else retry_at)
+            )
             replies: Sequence[Outbound] = []
             if gave_up:
-                self._mark_processed(conn, ids, error=f"gave up: {exc!r}"[:500])
+                self._mark_processed(conn, ids, error=f"gave up, {error}"[:500])
                 if self.on_failure:
-                    replies = self.on_failure(turn, exc)
-                    self.enqueue(
-                        conn,
-                        channel=turn.channel,
-                        conversation_id=turn.conversation_id,
-                        from_number=turn.to,
-                        to=turn.sender.value,
-                        recipient_identity_id=turn.sender_identity_id,
-                        messages=replies,
-                        turn_id=ctx.turn_id,
-                    )
+                    replies = self.on_failure(turn, failure)
+            elif attempts == 1 and self.on_delay:  # put off: said once, not at every try
+                replies = self.on_delay(turn, failure)
+            if replies:
+                self.enqueue(
+                    conn,
+                    channel=turn.channel,
+                    conversation_id=turn.conversation_id,
+                    from_number=turn.to,
+                    to=turn.sender.value,
+                    recipient_identity_id=turn.sender_identity_id,
+                    messages=replies,
+                    turn_id=ctx.turn_id,
+                )
             # A failed turn is recorded too: the model calls it made still cost money.
             write_turn(
                 conn,
@@ -266,10 +301,10 @@ class Worker(_Part):
                 ctx,
                 channel=turn.channel,
                 started_at=started_at,
-                status="gave_up" if gave_up else "failed",
+                status="gave_up" if gave_up else "failed",  # put off or not: `error` says why
                 messages_in=len(ids),
                 messages_out=len(replies),
-                error=repr(exc),
+                error=error,
             )
 
 

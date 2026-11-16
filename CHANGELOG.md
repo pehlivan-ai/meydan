@@ -5,6 +5,76 @@ versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor 
 tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
+### Added
+- `meydan.reply`: a reply as bubbles, for agents that talk to people on a messaging app. `Reply` is
+  structured output (a list of bubbles the model writes) with `outbound()` for the turn's handler;
+  `ReplyStyle` is its shape (1 to 3 bubbles, 600 characters each, no markdown a messaging app shows
+  as typed, no bubble that ends with ':'), checked where the reply is made, so a reply out of shape
+  goes back to the model with what was wrong. Every default can be changed or switched off in a
+  subclass, and `ReplyStyle.problems` works on plain strings ([docs/reply.md](docs/reply.md)). Two
+  instances each had their own before.
+- `meydan.runtime.route_by(resolve, handlers, default=)`: a handler per kind of sender, chosen in
+  code. `resolve(turn)` gives a key (a role, the number written to); the turn goes to that key's
+  handler. The key is resolved on every turn, a sender with no key goes to `default`, and a failed
+  lookup fails the turn instead of answering as a stranger. What stands behind a key is the app's:
+  one agent, several, or another `route_by` ([docs/routing.md](docs/routing.md)).
+- `Telegram(..., markup="whatsapp")`: text written in WhatsApp's marks (`*bold*`, `_italic_`,
+  `~strike~`, code) is sent as Telegram HTML, so one text reads the same on both channels. Left
+  out, text goes as it is, as before. Checked against the Bot API's HTML rules: `<`, `>` and `&`
+  escaped, marks that would cross are not formatted.
+- A runtime takes only its own channel's turns and sends only its own channel's replies
+  (`Runtime.serves`, from the channel's `name`; `WhatsAppCloud` and `Telegram` have one). Two
+  runtimes on one database, such as a test with a fake channel next to a bot, never take each
+  other's work. A channel without a name takes every turn, as before, and says so in the log.
+- `templates/instance`: tests run on their own database (the app's name with `_test`, made and
+  migrated by `tests/conftest.py`) and never read `.env`; CI runs them. Before, they used the
+  database you develop on, and an app built from the template saw a test take a turn a real
+  person was waiting for.
+- `meydan.agent.handler(agent, ...)`: an agent as a turn handler, what three apps each wrote
+  around their agent: history from the transcript, a time limit, the turn's model calls recorded,
+  the reply's bubbles sent. What is true only now (`clock`, `now(turn)`) goes at the end of the
+  new message, never into the instructions, so the provider's prompt cache keeps the conversation
+  (measured: 384 cached tokens on a turn's first call with the time in the instructions, about
+  1,536 with it at the end); `NOW_NOTE` tells the model about that block. `handler.run(turn,
+  history)` runs it without a database, for tests and evals.
+- `meydan.agent.handler(agent, ...)`: an agent as a turn handler, what every app wrote around its
+  agent (three apps, three copies): history from the transcript, a time limit, the turn's model
+  calls recorded, the reply's bubbles sent. What is true only now (`clock`, `now(turn)`) goes at
+  the end of the new message, never into the instructions, so the provider's prompt cache keeps
+  the conversation (measured: 384 tokens read from the cache with the time in the instructions,
+  about 1,536 with it at the end). `NOW_NOTE` tells the model what that block is.
+  `handler.run(turn, history)` runs it without the database, for tests and evals.
+- `meydan.rules`: what each channel allows (the WhatsApp reply window, message and button
+  sizes, receipts, how "seen" leans), kept in one file, `meydan/rules.py`, each rule with its
+  source. meydan's parts read it instead of keeping their own copies (the Telegram button limit,
+  the engagement scale's seen bias). An app builds its own with only what it changes
+  (`DEFAULT.but(whatsapp={...})`); there is no global setting.
+- `Clock.calendar(days, start=)`: a calendar can start on another day than today, e.g. this
+  week's Monday, for agents asked about days that already passed this week.
+- Telegram: a second reader of the same bot (409) is waited out quietly after a restart, when
+  the old long poll is still open, and named plainly in the log when it stays ("run one reader
+  per bot"), instead of a stack trace every three seconds.
+- `Runtime.health()`: whether due work is being done, read from the tables: the oldest message
+  waiting for its turn and the oldest reply waiting to be sent (turns put off on purpose do not
+  count), and replies given up in the last hour. The template's `/health` answers 503 when work
+  is stuck, so the deploy's health check rolls back or restarts.
+- `templates/instance`: a test leaves no work behind (a message waiting, a reply unsent), so the
+  next test's app never answers it.
+- `meydan.runtime.failures`: a failed turn is put off, tried again or given up by what failed
+  (`transient`, `retry`, `human`, `permanent`), read from Pydantic AI's errors or an app's own
+  (`TransientError`, `NeedsHumanError`, `PermanentError`). A provider that is down puts the turn
+  off and it is answered when the provider is back, within the channel's reply window; credits
+  that ran out stop it at once. `on_delay(turn, failure)` is called the first time a turn is put
+  off; `on_failure(turn, failure)` when it is given up. Before, a turn was tried three times in a
+  row and then dropped, whatever failed ([docs/failures.md](docs/failures.md)).
+### Upgrading
+- One new column: `meydan_inbox.retry_at` (nullable). Generate a migration
+  (`alembic revision --autogenerate`).
+- `on_failure`'s second argument is now a `Failure` (its `error` is the exception it used to be),
+  and it is called only when a turn is given up. Only `retry` failures count toward
+  `max_turn_attempts`.
+- A channel's `name` decides which turns a runtime takes; a fake channel in your tests needs one.
+- `templates/instance` has the migration for `retry_at`; its meydan pin moves to this release with it.
 
 ## [0.21.0] - 2026-11-13
 ### Added

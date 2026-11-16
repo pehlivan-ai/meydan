@@ -164,7 +164,7 @@ async def test_poison_turn_gives_up_and_sends_failure_reply(db):
         tables,
         ch,
         broken,
-        RuntimeConfig(debounce_s=0, max_wait_s=0, max_turn_attempts=2),
+        RuntimeConfig(debounce_s=0, max_wait_s=0, max_turn_attempts=2, retry_wait_s=0),
         on_failure=lambda turn, exc: [Outbound.text_message("Bir sorun oldu, birazdan dene.")],
     )
     receive(rt, [msg("w1", "selam", T0)])
@@ -207,3 +207,44 @@ async def test_typing_failure_does_not_break_the_turn(db):
     assert await rt.work_once() == 1
     await rt.send_once()
     assert [s[2] for s in ch.sent] == ["got: selam"]
+
+
+async def test_a_runtime_takes_only_its_own_channels_turns_and_replies(db):
+    """A second app on the same database (a test with a fake channel, a bot on another channel)
+    never takes a turn a person on another channel is waiting for, nor sends its reply."""
+    answered: list[str] = []
+
+    async def handler(turn):
+        answered.append(turn.channel)
+        return [Outbound.text_message("ok")]
+
+    class Elsewhere(FakeChannel):
+        name = "telegram"
+
+    whatsapp, elsewhere = FakeChannel(), Elsewhere()
+    ours, theirs = runtime(db, handler, whatsapp), runtime(db, handler, elsewhere)
+    receive(ours, [msg("w1", "selam", T0)])  # arrives on WhatsApp
+    assert await theirs.work_once() == 0  # the other runtime does not take it
+    assert await ours.work_once() == 1
+    assert await theirs.send_once() == 0  # nor sends its reply
+    while await ours.send_once():
+        pass
+    assert answered == ["whatsapp"]
+    assert [body for _, _, body in whatsapp.sent] == ["ok"] and elsewhere.sent == []
+
+
+async def test_health_says_whether_due_work_is_done_and_ignores_turns_put_off(db):
+    async def answer(turn):
+        return [Outbound.text_message("ok")]
+
+    ch = FakeChannel()
+    rt = runtime(db, answer, ch)
+    assert rt.health().ok
+    receive(rt, [msg("w1", "selam", T0)])
+    with rt.engine.begin() as c:  # nobody took it for ten minutes: the worker is stuck
+        c.execute(update(rt.t.inbox).values(received_at=text("now() - interval '10 minutes'")))
+    stuck = rt.health(max_waiting_s=120)
+    assert not stuck.ok and stuck.waiting_s >= 600
+    with rt.engine.begin() as c:  # put off on purpose: not stuck
+        c.execute(update(rt.t.inbox).values(retry_at=text("now() + interval '5 minutes'")))
+    assert rt.health(max_waiting_s=120).ok

@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from meydan.channels.base import Address, Outbound, SendError
-from meydan.channels.telegram import Telegram, bot_id, parse_messages, poll
+from meydan.channels.telegram import Telegram, bot_id, parse_messages, poll, whatsapp_to_html
 from meydan.channels.whatsapp import reply_payload
 
 TOKEN = "111:secret-a"
@@ -141,3 +141,62 @@ async def test_a_button_payload_over_telegrams_limit_is_refused_before_sending()
             "111", "900", ask
         )
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    ("written", "sent"),
+    [
+        ("*16 Kasım Pazartesi*", "<b>16 Kasım Pazartesi</b>"),
+        ("_saat 14:35 itibarıyla_", "<i>saat 14:35 itibarıyla</i>"),
+        ("~eski~ yeni", "<s>eski</s> yeni"),
+        ("kod: `a_b*c`", "kod: <code>a_b*c</code>"),
+        ("```\n*x* < y\n```", "<pre>\n*x* &lt; y\n</pre>"),
+        # What WhatsApp would not format stays text, and a "<" is never a tag.
+        ("2*3*4 = 24, snake_case_name", "2*3*4 = 24, snake_case_name"),
+        ("* not bold *", "* not bold *"),
+        ("a < b & c > d", "a &lt; b &amp; c &gt; d"),
+        ("*<b>x</b>*", "<b>&lt;b&gt;x&lt;/b&gt;</b>"),
+        # Marks that cross would make tags that overlap, which Telegram refuses: one is left.
+        ("*a _b* c_", "<b>a _b</b> c_"),
+    ],
+)
+def test_whatsapps_marks_become_telegram_html(written, sent):
+    assert whatsapp_to_html(written) == sent
+
+
+async def test_with_whatsapp_markup_text_goes_as_html():
+    client, calls = api()
+    channel = Telegram(["111:secret-a"], client=client, markup="whatsapp")
+    await channel.send("111", "900", Outbound.text_message("*Salı*\n- 10:00 Bale"))
+    assert calls == [
+        ("/bot111:secret-a/sendMessage",
+         {"chat_id": 900, "text": "<b>Salı</b>\n- 10:00 Bale", "parse_mode": "HTML"})
+    ]  # fmt: skip
+
+
+async def test_a_second_reader_is_waited_out_quietly_then_named_plainly(caplog, monkeypatch):
+    """A restart leaves the old long poll open for a while: that is waited out without a stack
+    trace. A reader that stays is a second process, and the log says so."""
+    import logging
+
+    from meydan.channels import telegram as tg
+
+    monkeypatch.setattr(tg, "CONFLICT_GRACE_S", 0)
+    stop = asyncio.Event()
+    conflicts = 0
+
+    class Busy(Telegram):
+        async def updates(self, bot, offset):
+            nonlocal conflicts
+            conflicts += 1
+            if conflicts >= 2:
+                stop.set()
+            raise SendError("getUpdates: Conflict", retryable=False, code=409)
+
+    channel = Busy([TOKEN], client=api()[0])
+    with caplog.at_level(logging.INFO, logger="meydan.channels.telegram"):
+        await asyncio.wait_for(poll(channel, "111", lambda m: None, stop), 10)
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("another reader is still open" in m for m in messages)
+    assert any("run one reader per bot" in m for m in messages)
+    assert not any(r.exc_info for r in caplog.records)  # no stack traces for a known case

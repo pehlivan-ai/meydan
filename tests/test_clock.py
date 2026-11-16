@@ -1,4 +1,4 @@
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import pytest
 
@@ -46,3 +46,10 @@ def test_format_window_at_its_precision():
         c.format_window(date(2026, 12, 12), date(2026, 12, 14))
         == "12 Aralık Cumartesi – 13 Aralık Pazar"
     )
+
+
+def test_a_calendar_can_start_on_another_day():
+    clock = Clock("Europe/Istanbul", TR, source=lambda: datetime(2026, 11, 21, 7, 0, tzinfo=UTC))
+    assert clock.calendar(2) == ["2026-11-21 21 Kasım Cumartesi", "2026-11-22 22 Kasım Pazar"]
+    monday = clock.today() - timedelta(days=clock.today().weekday())
+    assert clock.calendar(1, start=monday) == ["2026-11-16 16 Kasım Pazartesi"]

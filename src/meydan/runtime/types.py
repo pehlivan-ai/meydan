@@ -21,6 +21,11 @@ def _clock():
 
 
 class Channel(Protocol):
+    # Optional: the channel's name ("whatsapp", "telegram"), as its messages carry it. A runtime
+    # takes only that channel's turns and sends only its replies, so two apps (or a test with a
+    # fake) on one database never take each other's. Without a name a runtime takes every turn.
+    # name: str
+
     async def send(self, from_number: str, to: str, message: Outbound) -> str: ...
 
     # Mark the message (and everything before it) read and show "typing…".
@@ -42,6 +47,9 @@ class Turn:
     actor_id: uuid.UUID  # who it is, as settled now (memory and domain data hang off this)
     sender_name: str | None
     messages: Sequence[Inbound]
+    # What the app's routing found out about the sender (`route_by`): a role, a profile, a
+    # credential. None unless a resolver set it; meydan never reads it.
+    resolved: Any = None
 
     @property
     def text(self) -> str:
@@ -59,7 +67,9 @@ class Intercepted:
 # Looks at each new message before any turn; returns Intercepted to consume it, None to pass.
 Interceptor = Callable[[Connection, Inbound, "identity.Routed"], Intercepted | None]
 Handler = Callable[[Turn], Awaitable[Sequence[Outbound]]]
-FailureReply = Callable[[Turn, BaseException], Sequence[Outbound]]
+# What the person is sent when a turn is given up (`on_failure`) or first put off (`on_delay`).
+# The second argument is a `meydan.runtime.failures.Failure`: its `kind`, `group`, `error`.
+FailureReply = Callable[[Turn, Any], Sequence[Outbound]]
 
 
 @dataclass
@@ -67,6 +77,12 @@ class RuntimeConfig:
     debounce_s: float = 2.5  # wait this long after a person's last message before replying
     max_wait_s: float = 8.0  # ...but never longer than this after their first unanswered one
     max_turn_attempts: int = 3  # then give up on those messages (poison message guard)
+    # A turn that fails for a passing reason (the model's provider is down) is tried again after
+    # these waits, the last one repeating. It is given up when the channel no longer lets us
+    # answer (its reply window, `meydan.rules`), or after `give_up_after` on a channel without one.
+    retry_waits_s: tuple[float, ...] = (30, 120, 600, 1800, 3600)
+    retry_wait_s: float = 5  # between tries of a failure nobody names, times the attempt (max 60)
+    give_up_after_s: float = 24 * 3600
     max_send_attempts: int = 6  # then dead letter
     chars_per_second: float = 40  # pacing between bubbles ("typing" speed)
     max_bubble_gap_s: float = 3.0
@@ -90,10 +106,13 @@ class _Part:
     t = property(lambda self: self.rt.t)
     engine = property(lambda self: self.rt.engine)
     channel = property(lambda self: self.rt.channel)
+    serves = property(lambda self: self.rt.serves)
     cfg = property(lambda self: self.rt.cfg)
     presence = property(lambda self: self.rt.presence)
     handler = property(lambda self: self.rt.handler)
     on_failure = property(lambda self: self.rt.on_failure)
+    on_delay = property(lambda self: self.rt.on_delay)
+    rules = property(lambda self: self.rt.rules)
     intercept = property(lambda self: self.rt.intercept)
 
     def enqueue(self, conn: Connection, **kwargs: Any) -> uuid.UUID | None:

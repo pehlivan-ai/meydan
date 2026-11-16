@@ -21,10 +21,11 @@ import contextlib
 import logging
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import datetime, timedelta
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Connection, Engine
+from sqlalchemy import Connection, Engine, func, select
 
 from meydan.channels.base import Inbound, Outbound, StatusUpdate, TemplateUpdate
 from meydan.runtime.conversation import Said, transcript
@@ -43,6 +44,7 @@ from meydan.runtime.types import (
     Interceptor,
     RuntimeConfig,
     Turn,
+    _clock,
 )
 from meydan.runtime.worker import Worker
 
@@ -50,8 +52,20 @@ __all__ = [
     "Channel", "FailureReply", "Handler", "Intercepted", "Interceptor", "Replied", "Runtime",
     "RuntimeConfig", "Said", "Turn", "replied_to", "transcript",
 ]  # fmt: skip
+from meydan.rules import DEFAULT, Rules
 
 log = logging.getLogger("meydan.runtime")
+
+
+@dataclass(frozen=True)
+class Health:
+    """Whether due work is being done: the oldest message waiting for its turn, the oldest reply
+    waiting to be sent (seconds), and replies given up in the last hour (shown, not judged)."""
+
+    ok: bool
+    waiting_s: float
+    sending_s: float
+    dead_last_hour: int
 
 
 class Runtime:
@@ -66,19 +80,27 @@ class Runtime:
         handler: Handler,
         config: RuntimeConfig | None = None,
         on_failure: FailureReply | None = None,
+        on_delay: FailureReply | None = None,
+        rules: "Rules | None" = None,
         intercept: Sequence[Interceptor] = (),
         expect: "Expectations | None" = None,
     ):
         self.engine = engine
         self.t = tables
         self.channel = channel
+        # Which channel's turns and replies this runtime takes (see `Channel.name`).
+        self.serves: str | None = getattr(channel, "name", None)
+        if self.serves is None:
+            log.warning("the channel has no name: this runtime takes every channel's turns")
         self.handler = handler
         self.cfg = config or RuntimeConfig()
         self.presence = Presence.of(self.cfg.presence)
         # Answers to what we asked are matched before anything else sees them.
         self.expect = expect
         self.intercept = ([expect.intercept] if expect else []) + list(intercept)
-        self.on_failure = on_failure
+        self.on_failure = on_failure  # the turn is given up
+        self.on_delay = on_delay  # the turn is put off for the first time
+        self.rules = rules or DEFAULT  # the channels' rules (`meydan.rules`)
         self._receiver = Receiver(self)
         self._outbox = Outbox(self)
         self._worker = Worker(self)
@@ -132,6 +154,39 @@ class Runtime:
         return await self._outbox.send_once()
 
     _backoff = staticmethod(backoff)
+
+    def health(self, max_waiting_s: float = 120, max_sending_s: float = 300) -> "Health":
+        """Is work that is due being done? Read from the tables, so it says the truth even when
+        the loops that should do the work are stuck. A turn put off on purpose is not waiting
+        (`retry_at` ahead); a message is waiting once its turn is due and nobody took it."""
+        i, o = self.t.inbox, self.t.outbox
+        now = _clock()
+        ours_in = [i.c.channel == self.serves] if self.serves else []
+        ours_out = [o.c.channel == self.serves] if self.serves else []
+        due = (i.c.retry_at.is_(None)) | (i.c.retry_at <= now)
+        with self.engine.connect() as conn:
+            waiting = conn.scalar(
+                select(func.extract("epoch", now - func.min(i.c.received_at))).where(
+                    i.c.processed_at.is_(None), due, *ours_in
+                )
+            )
+            sending = conn.scalar(
+                select(func.extract("epoch", now - func.min(o.c.next_attempt_at))).where(
+                    o.c.status == "pending", o.c.next_attempt_at <= now, *ours_out
+                )
+            )
+            dead = conn.scalar(
+                select(func.count()).where(
+                    o.c.status == "dead", o.c.updated_at >= now - timedelta(hours=1), *ours_out
+                )
+            )
+        waiting_s, sending_s = float(waiting or 0), float(sending or 0)
+        return Health(
+            ok=waiting_s <= max_waiting_s and sending_s <= max_sending_s,
+            waiting_s=round(waiting_s, 1),
+            sending_s=round(sending_s, 1),
+            dead_last_hour=int(dead or 0),
+        )
 
     async def run(self, stop: asyncio.Event) -> None:
         """Reader, worker and sender loops until `stop` is set. Run as a background task."""

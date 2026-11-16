@@ -1,16 +1,22 @@
 """The Pydantic AI adapter: a meydan tool as an agent's tool, a transcript as its history.
 No model is called: Pydantic AI's test model calls every tool once."""
 
+import asyncio
 import uuid
 from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import pytest
 from pydantic_ai import Agent
-from pydantic_ai.messages import ModelRequest, ModelResponse
+from pydantic_ai.messages import ModelRequest, ModelResponse, ToolCallPart
+from pydantic_ai.models.function import FunctionModel
 from pydantic_ai.models.test import TestModel
 
-from meydan.agent import as_tool, history
+from meydan.agent import as_tool, handler, history
+from meydan.channels.base import Address, Inbound, Outbound
+from meydan.clock import TR, Clock
+from meydan.reply import Reply
+from meydan.runtime import Turn
 from meydan.runtime.conversation import Said
 from meydan.tools import ToolContext, ToolError
 
@@ -86,3 +92,55 @@ async def test_history_merges_each_sides_lines_and_starts_with_the_person():
     assert response.parts[0].content == "Merhaba!\nHangi hizmet için?"
     assert last.parts[0].content == "manikür"
     assert history([]) == []
+
+
+def a_turn(text: str) -> Turn:
+    sender = Address("tel", "+10000000001")
+    message = Inbound("whatsapp", "m1", Address("wa-pnid", "1"), sender, T0, "text", text)
+    return Turn(uuid.uuid4(), "whatsapp", "1", sender, uuid.uuid4(), ACTOR, None, [message])
+
+
+def answers(*bubbles: str) -> FunctionModel:
+    """A model that answers with these bubbles, and keeps what it was given."""
+
+    def model(messages, info):
+        answers.seen = {
+            "instructions": info.instructions or "",
+            "prompt": messages[-1].parts[0].content,
+        }
+        [output] = info.output_tools
+        return ModelResponse(parts=[ToolCallPart(output.name, {"bubbles": list(bubbles)})])
+
+    return FunctionModel(model)
+
+
+async def test_a_handler_runs_the_agent_and_sends_its_bubbles_with_the_time_at_the_end():
+    clock = Clock("Europe/Istanbul", TR, source=lambda: T0)
+    agent = Agent(answers("Merhaba!", "Buyurun."), output_type=Reply, instructions="Be kind.")
+    reply = handler(agent, clock=clock, now=lambda turn: ["Open today: yes"])
+    out = await reply(a_turn("selam"))
+    assert [m.text for m in out] == ["Merhaba!", "Buyurun."]
+    assert answers.seen["prompt"] == (
+        "selam\n\n(Now (Europe/Istanbul): 11 Kasım Çarşamba 15:00\nOpen today: yes)"
+    )
+    assert "15:00" not in answers.seen["instructions"]  # what changes stays out of them
+
+
+async def test_a_handler_gives_up_on_a_turn_that_takes_too_long():
+    async def slow(messages, info):
+        await asyncio.sleep(1)
+
+    agent = Agent(FunctionModel(slow), output_type=Reply)
+    with pytest.raises(TimeoutError):
+        await handler(agent, timeout_s=0.05)(a_turn("selam"))
+
+
+async def test_an_app_says_what_a_reply_sends_and_what_the_tools_are_given():
+    agent = Agent(answers("Tamam."), output_type=Reply, deps_type=str)
+    pin = Outbound.location_message(41.0, 29.0, place="Salon")
+    reply = handler(
+        agent, deps=lambda turn: "deps", messages=lambda out, turn: [*out.outbound(), pin]
+    )
+    out = await reply(a_turn("nerede"))
+    assert [m.kind for m in out] == ["text", "location"]
+    assert reply.prompt(a_turn("")) == "(a message with no text: a photo, a voice note)"

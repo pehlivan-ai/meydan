@@ -80,14 +80,17 @@ class Outbox(_Part):
                     f"""
                 SELECT o.* FROM {self.t.outbox.name} o
                 JOIN (SELECT DISTINCT ON (conversation_id) id FROM {self.t.outbox.name}
-                      WHERE status = 'pending' ORDER BY conversation_id, id) head
+                      WHERE status = 'pending'
+                        AND (CAST(:serves AS text) IS NULL OR channel = :serves)
+                      ORDER BY conversation_id, id) head
                   ON head.id = o.id
                 WHERE o.next_attempt_at <= now()
                 ORDER BY o.next_attempt_at
                 LIMIT 1
                 FOR UPDATE OF o SKIP LOCKED
                 """
-                )
+                ),
+                {"serves": self.serves},  # only this runtime's channel's replies
             )
             .mappings()
             .first()

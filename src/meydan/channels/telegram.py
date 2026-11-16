@@ -18,19 +18,27 @@ How meydan's terms land here:
   most, enough for an `expect` token). A press arrives as kind "button", the way WhatsApp's
   quick replies do, so `Expectations` needs no change.
 
+- text written in WhatsApp's marks (`*bold*`, `_italic_`, `~strike~`, `` `code` ``, code
+  blocks) shows those marks as typed on Telegram, which formats only when told how. With
+  `markup="whatsapp"` the channel turns the marks into Telegram's HTML, so one text reads the
+  same on both channels. Left out, text goes as it is (plain).
+
 Details: docs/telegram.md.
 """
 
 import asyncio
 import contextlib
+import html
 import logging
+import re
 from collections.abc import Callable, Iterable, Sequence
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
 from meydan.channels.base import Address, Inbound, Outbound, SendError
+from meydan.rules import TELEGRAM
 
 log = logging.getLogger(__name__)
 
@@ -42,7 +50,12 @@ POLL_S = 25  # how long Telegram holds a getUpdates call open
 # Long enough for a connection that needs a few retransmits: on a lossy path a shorter limit
 # gives up on attempts that would have got through.
 CONNECT_S = 20
-CALLBACK_DATA_MAX = 64  # bytes, Telegram's limit for what a button carries
+# Telegram answers 409 to getUpdates while another getUpdates is open for the same bot. After a
+# restart the old one stays open for up to POLL_S; longer than this, a second process reads it.
+CONFLICT = 409
+CONFLICT_GRACE_S = POLL_S * 2 + 10
+# Bytes a button carries back (Telegram's `callback_data` limit), from meydan's channel rules.
+CALLBACK_DATA_MAX: int = TELEGRAM.button_payload_max or 64
 
 Render = Callable[[Outbound], tuple[str, Sequence[str]]]  # template -> text, button labels
 
@@ -54,6 +67,43 @@ def bot_id(token: str) -> str:
     return head
 
 
+# WhatsApp's marks, by its rules: a mark hugs its text (no space just inside it) and stands
+# apart from a word (no letter or digit just outside it), so "2*3*4" and "snake_case" stay text.
+# Its text holds no "<" or ">": after escaping, those are only our own tags, so a mark never cuts
+# across another one (Telegram refuses entities that overlap without nesting).
+_MARKS = [
+    (
+        re.compile(
+            rf"(?<![\w{m}]){re.escape(m)}(?!\s)([^{m}\n<>]+?)(?<!\s){re.escape(m)}(?![\w{m}])"
+        ),
+        tag,
+    )
+    for m, tag in (("*", "b"), ("_", "i"), ("~", "s"))
+]
+_CODE = re.compile(r"```(.+?)```|`([^`\n]+)`", re.DOTALL)
+
+
+def whatsapp_to_html(text: str) -> str:
+    """Text in WhatsApp's marks as Telegram HTML (`parse_mode="HTML"`). Everything else is
+    escaped, so a "<" in a message is never read as a tag; code is left unformatted inside."""
+    out, last = [], 0
+    for m in _CODE.finditer(text):
+        out.append(_marks(text[last : m.start()]))
+        block, inline = m.group(1), m.group(2)
+        out.append(f"<pre>{html.escape(block)}</pre>" if block is not None else
+                   f"<code>{html.escape(inline)}</code>")  # fmt: skip
+        last = m.end()
+    out.append(_marks(text[last:]))
+    return "".join(out)
+
+
+def _marks(text: str) -> str:
+    text = html.escape(text, quote=False)
+    for pattern, tag in _MARKS:
+        text = pattern.sub(rf"<{tag}>\1</{tag}>", text)
+    return text
+
+
 def _plain(message: Outbound) -> tuple[str, Sequence[str]]:
     """A template nobody taught us to render: its name and parameters, buttons as options."""
     params = ", ".join(f"{k}: {v}" for k, v in message.params.items())
@@ -61,14 +111,18 @@ def _plain(message: Outbound) -> tuple[str, Sequence[str]]:
 
 
 class Telegram:
+    name = CHANNEL
+
     def __init__(
         self,
         tokens: Iterable[str],
         render: Render | None = None,
         client: httpx.AsyncClient | None = None,
+        markup: Literal["plain", "whatsapp"] = "plain",
     ):
         self._tokens = {bot_id(t): t for t in tokens}
         self._render = render or _plain
+        self._markup = markup
         self._client = client or httpx.AsyncClient(
             timeout=httpx.Timeout(POLL_S + 15, connect=CONNECT_S)
         )
@@ -125,10 +179,19 @@ class Telegram:
                 for label, payload in zip(labels, message.buttons, strict=True)
             ]
             markup = {"reply_markup": {"inline_keyboard": [row]}} if row else {}
-            sent = await self.call(from_number, "sendMessage", chat_id=chat, text=text, **markup)
+            sent = await self.call(
+                from_number, "sendMessage", chat_id=chat, **self._text(text), **markup
+            )
         else:
-            sent = await self.call(from_number, "sendMessage", chat_id=chat, text=message.text)
+            sent = await self.call(
+                from_number, "sendMessage", chat_id=chat, **self._text(message.text)
+            )
         return f"{from_number}:{chat}:{sent['message_id']}"
+
+    def _text(self, text: str) -> dict[str, Any]:
+        if self._markup == "whatsapp":
+            return {"text": whatsapp_to_html(text), "parse_mode": "HTML"}
+        return {"text": text}
 
     async def typing(self, from_number: str, message_id: str) -> None:
         _, chat, _ = (message_id.split(":") + ["", ""])[:3]
@@ -202,9 +265,14 @@ async def poll(
     """Read one bot until `stop`: hand each batch to `receive` (which stores it), and only then
     move past it. A batch that fails to store is asked for again; the inbox drops repeats."""
     offset: int | None = None
+    conflict_since: float | None = None  # another process reads this bot (409), since when
+    loop = asyncio.get_running_loop()
     while not stop.is_set():
         try:
             batch = await channel.updates(bot, offset)
+            if conflict_since is not None:
+                log.info("bot %s: the other reader is gone, reading again", bot)
+                conflict_since = None
             if not batch:
                 continue
             receive(parse_messages(bot, batch))
@@ -216,6 +284,22 @@ async def poll(
                     log.warning("could not acknowledge a button press", exc_info=True)
         except asyncio.CancelledError:
             raise
+        except SendError as e:
+            if e.code != CONFLICT:
+                log.exception("reading bot %s failed; trying again", bot)
+            elif conflict_since is None:
+                # A restart: the old process's long poll is still open, for up to POLL_S.
+                conflict_since = loop.time()
+                log.info("bot %s: another reader is still open; waiting for it", bot)
+            elif loop.time() - conflict_since > CONFLICT_GRACE_S:
+                # Not a restart: a second process reads this bot, and each takes updates from
+                # the other. Say it plainly, keep trying.
+                log.error(
+                    "bot %s: another process has been reading this bot for %d s; run one "
+                    "reader per bot", bot, loop.time() - conflict_since,
+                )  # fmt: skip
+            with contextlib.suppress(TimeoutError):
+                await asyncio.wait_for(stop.wait(), 3)
         except Exception:
             log.exception("reading bot %s failed; trying again", bot)
             with contextlib.suppress(TimeoutError):

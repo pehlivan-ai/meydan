@@ -50,6 +50,7 @@ repeated webhooks. Long polling does not work while a webhook is set on the bot.
 | Receipts (delivered, read) | yes | none: the engagement scale stops at "sent" |
 | "Seen" | read receipt | none; "typing…" works |
 | Groups | not handled | skipped (private chats only) |
+| Formatting | `*bold*`, `_italic_`, `~strike~`, `` `code` `` in the text | none unless told: `markup="whatsapp"` turns the same marks into Telegram HTML |
 
 ## Templates without templates
 

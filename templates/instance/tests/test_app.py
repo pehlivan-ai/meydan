@@ -1,6 +1,6 @@
 """The plumbing, end to end: Meta's handshake, the signature check, and one signed message
-through the webhook and the running loops to your reply. Fake channel, real database
-(`DATABASE_URL`, migrated). Message ids are new on every run, so nothing needs to be cleaned."""
+through the webhook and the running loops to your reply. Fake channel, a database of their own
+(`conftest.py`). Message ids are new on every run, so nothing needs to be cleaned."""
 
 import hashlib
 import hmac
