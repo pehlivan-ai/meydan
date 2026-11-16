@@ -5,8 +5,10 @@ versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor 
 tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
+
+## [0.23.0] - 2026-11-16
 ### Changed
-- Postgres 16 or newer, not only 18. Ids are made by meydan (`meydan.ids.uuid7`: a time-ordered
+- Postgres 16 and 17 are supported, not only 18: the oldest supported version is now 16. Ids are made by meydan (`meydan.ids.uuid7`: a time-ordered
   UUID, version 7, RFC 9562, monotonic within a process by a 12-bit counter, section 6.2 method
   1) instead of Postgres 18's `uuidv7()`, so `ORDER BY id` stays insertion order, a reply's
   bubbles included. CI runs every test on Postgres 16, 17 and 18. The template's first migration

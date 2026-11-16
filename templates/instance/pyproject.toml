@@ -14,7 +14,7 @@ package = false
 
 [tool.uv.sources]
 # Pin a release; move the tag when you take a newer meydan (read its CHANGELOG "Upgrading").
-meydan = { git = "https://github.com/pehlivan-ai/meydan", rev = "v0.22.0" }
+meydan = { git = "https://github.com/pehlivan-ai/meydan", rev = "v0.23.0" }
 
 [dependency-groups]
 dev = ["pytest>=8", "ruff>=0.17.2"]
