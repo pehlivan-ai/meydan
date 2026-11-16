@@ -1,4 +1,4 @@
-"""Runtime tests against a real Postgres 18 (advisory locks, SKIP LOCKED, uuidv7); see conftest."""
+"""Runtime tests against a real Postgres 16+ (advisory locks, SKIP LOCKED); see conftest."""
 
 import asyncio
 from datetime import timedelta

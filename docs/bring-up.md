@@ -33,7 +33,7 @@ app and every number you run.
 | 9 | Templates, approved | WhatsApp Manager → Message templates · [Template API](https://developers.facebook.com/documentation/business-messaging/whatsapp/reference/whatsapp-business-account/message-template-api) · [templates.md](templates.md) | messages that reach people outside the 24-hour window | by hand today; meydan follows their state |
 | 10 | A payment method on the account | WhatsApp Manager → Payment settings · [Pricing](https://developers.facebook.com/documentation/business-messaging/whatsapp/pricing) | paid templates can be sent | by hand, once |
 | 11 | Business verification | Business settings → Security Center | more than two numbers; higher limits | by hand, once; takes days |
-| 12 | Postgres 18 | local, or the instance template's compose stack | **database URL** | compose |
+| 12 | Postgres 16 or newer (the template runs 18) | local, or the instance template's compose stack | **database URL** | compose |
 | 13 | A model key, if a model reads messages | [OpenRouter keys](https://openrouter.ai/settings/keys) (*unchecked*) · `meydan.llm` | **model key** | by hand, once |
 
 Rows 1 to 4 are the handover: once you have the **app id**, the **app secret**, the **access
