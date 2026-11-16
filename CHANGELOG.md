@@ -30,6 +30,12 @@ tables or APIs; the entry says how to upgrade).
   migrated by `tests/conftest.py`) and never read `.env`; CI runs them. Before, they used the
   database you develop on, and an app built from the template saw a test take a turn a real
   person was waiting for.
+- `meydan.eval` (extra `eval`): scenarios for an agent on Pydantic Evals, which runs the cases,
+  repeats them and reports. meydan adds what only it knows: `talk(handler, says)` runs a
+  conversation through the same handler the runtime uses, and counts what the model was told it
+  got wrong and sent again (`SentBack`, a score); evaluators for what an agent did (`Called`,
+  `NoCalls`, `Says`, `DoesNotSay`, `MaxBubbles`); `summary(report)`, a line per case for a
+  terminal. Two apps had each written their own runner.
 - `meydan.agent.handler(agent, ...)`: an agent as a turn handler, what three apps each wrote
   around their agent: history from the transcript, a time limit, the turn's model calls recorded,
   the reply's bubbles sent. What is true only now (`clock`, `now(turn)`) goes at the end of the

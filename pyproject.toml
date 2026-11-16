@@ -42,6 +42,9 @@ access = [
 email = [
     "dnspython>=2.6",
 ]
+eval = [
+    "pydantic-evals>=2.61",
+]
 
 [project.urls]
 Repository = "https://github.com/pehlivan-ai/meydan"

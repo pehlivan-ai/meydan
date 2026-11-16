@@ -249,6 +249,7 @@ Browser ─▶ auth (session) ─▶ access (roles → scopes) ─▶ visibility
 - An answer as bubbles: [docs/reply.md](docs/reply.md)
 - A handler per kind of sender: [docs/routing.md](docs/routing.md)
 - When a turn fails: [docs/failures.md](docs/failures.md)
+- Scenarios for an agent, on Pydantic Evals: `meydan.eval` (its docstring has the recipe)
 - Seen and typing: [docs/presence.md](docs/presence.md)
 - Turn records and costs: [docs/observe.md](docs/observe.md)
 - Sign-in: [docs/auth.md](docs/auth.md)
