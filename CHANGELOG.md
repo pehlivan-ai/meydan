@@ -5,6 +5,8 @@ versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor 
 tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
+
+## [0.22.0] - 2026-11-16
 ### Added
 - `meydan.reply`: a reply as bubbles, for agents that talk to people on a messaging app. `Reply` is
   structured output (a list of bubbles the model writes) with `outbound()` for the turn's handler;
