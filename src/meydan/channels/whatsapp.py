@@ -342,6 +342,8 @@ class WhatsAppCloud:
     """Sends on behalf of any of our numbers: the caller passes `from_number` (phone_number_id),
     so replies go out from the number the person wrote to (reply affinity)."""
 
+    name = CHANNEL
+
     def __init__(
         self,
         access_token: str,

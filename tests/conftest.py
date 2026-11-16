@@ -48,6 +48,8 @@ def db():
 
 
 class FakeChannel:
+    name = "whatsapp"  # the channel the tests' messages arrive on (`msg`)
+
     def __init__(self, fail: list[SendError] | None = None):
         self.sent: list[tuple[str, str, str]] = []
         self.typing_for: list[str] = []
@@ -85,7 +87,9 @@ def msg(
 def runtime(db, handler, channel=None, **cfg) -> Runtime:
     engine, tables = db
     # "instant" presence: no human-like delays in tests unless a test asks for them.
-    defaults = dict(debounce_s=0, max_wait_s=0, chars_per_second=1e9, presence="instant")
+    defaults = dict(
+        debounce_s=0, max_wait_s=0, chars_per_second=1e9, presence="instant", retry_wait_s=0
+    )
     return Runtime(
         engine, tables, channel or FakeChannel(), handler, RuntimeConfig(**(defaults | cfg))
     )

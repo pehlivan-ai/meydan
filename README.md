@@ -122,7 +122,8 @@ Latest: **v0.9.0**, templates the sender knows: held while pending or paused, se
 | `meydan.llm` | Provider-agnostic models from spec strings (`openrouter:…`, `vertex:…@location`), fallback chain, per-provider concurrency limit with bounded queue, one retry layer (Retry-After, jittered exponential backoff), timeouts | available (`meydan[llm]`) |
 | `meydan.clock` | One place that converts time: instance zone, injectable clock, localized date text, date windows at their precision ("Aralık 2026"), a day calendar for agent context | available |
 | `meydan.tools` | Framework-agnostic tool contract: `(ToolContext, **params) -> model`, identity from the channel, `ToolError` for business rules | available |
-| `meydan.agent` | Pydantic AI adapter: a `meydan.tools` tool as an agent's tool (`as_tool`), a conversation's transcript as its message history (`history`) | available (`meydan[llm,runtime]`), new |
+| `meydan.agent` | Pydantic AI adapter: a `meydan.tools` tool as an agent's tool (`as_tool`), a conversation's transcript as its message history (`history`), an agent as a turn handler with history, time limit, usage and the time at the end of each message (`handler`) | available (`meydan[llm,runtime]`), new |
+| `meydan.reply` | A reply as bubbles: structured output an agent returns (`Reply`), its shape checked where it is made (`ReplyStyle`: how many bubbles, how long, no markdown a messaging app shows as typed), every default changeable ([docs/reply.md](docs/reply.md)) | available, new |
 | `meydan.booking` | **A primitive: take it only if the app books time.** Appointments: staff, services, shifts, bookings that cannot overlap (a database constraint), closures, a waiting list; hold → confirm or cancel, free gaps, a freed time offered to who waits, in order, under an offer policy (lead time, reply window, quiet hours, a cap per person); every function takes `now`, so a month can be simulated in seconds ([docs/booking.md](docs/booking.md)) | available as an optional primitive (`meydan[booking]`, needs `btree_gist`), new |
 | `templates/instance` | A small working app (webhook, runtime loops, Alembic, Dockerfile, a fake-channel `try.py`) with its Docker Compose stack (Postgres 18, migrate, app, Caddy), CI/CD workflow, digest-pinned deploy with health check and rollback, one-time GCP setup | available |
 | `meydan.runtime` | Inbox (idempotent on message id) → identities (actors, addresses, evidence-based claims; [docs/identity.md](docs/identity.md)) → worker, one turn per conversation at a time (advisory lock, debounce, resequencing, poison-message guard) → transactional outbox → sender (per-conversation order, bubble pacing, jittered retries, dead letter, receipt correlation). Postgres 18. One `Runtime` over parts by responsibility: `inbound` (receive, interceptors, receipts, `replied_to`), `outbound` (enqueue, sender), `worker` (seen, turns), `conversation` (`transcript`), `identity`, `templates` | available (`meydan[runtime]`) |
@@ -168,6 +169,9 @@ async def reply(turn: Turn) -> list[Outbound]:
 
 A reply is a list of bubbles: `Outbound.text_message`, `Outbound.template_message` (outside the
 24 h window) or `Outbound.location_message(lat, lng, place=, address=)` (a map pin).
+
+For an agent that talks to people, let the model write the bubbles: `meydan.reply.Reply` as the
+agent's output type, then `result.output.outbound()` ([docs/reply.md](docs/reply.md)).
 
 Tools follow the `meydan.tools` contract: the person comes from the channel, never from the model.
 
@@ -242,6 +246,10 @@ Browser ─▶ auth (session) ─▶ access (roles → scopes) ─▶ visibility
 - What to get before an app can talk (the bring-up list): [docs/bring-up.md](docs/bring-up.md)
 - Who is who: [docs/identity.md](docs/identity.md)
 - A second channel, with nothing to apply for: [docs/telegram.md](docs/telegram.md)
+- An answer as bubbles: [docs/reply.md](docs/reply.md)
+- A handler per kind of sender: [docs/routing.md](docs/routing.md)
+- When a turn fails: [docs/failures.md](docs/failures.md)
+- Scenarios for an agent, on Pydantic Evals: `meydan.eval` (its docstring has the recipe)
 - Seen and typing: [docs/presence.md](docs/presence.md)
 - Turn records and costs: [docs/observe.md](docs/observe.md)
 - Sign-in: [docs/auth.md](docs/auth.md)

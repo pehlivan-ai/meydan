@@ -22,6 +22,8 @@ from datetime import datetime, timedelta
 from enum import IntEnum
 from typing import Literal
 
+from meydan.rules import DEFAULT
+
 SeenBias = Literal["exact", "under", "over"]
 
 
@@ -33,9 +35,9 @@ class Engagement(IntEnum):
 
 
 # How each channel's "seen" signal leans; add a channel here when meydan gains one.
+# From meydan's channel rules (`meydan/rules.py`), so it is kept in one place.
 SEEN_BIAS: dict[str, SeenBias] = {
-    "whatsapp": "under",  # read receipts can be turned off: SEEN is missing, never false
-    "email": "over",  # open pixels fire on prefetch (e.g. privacy protection): SEEN can be false
+    name: rules.seen_bias for name, rules in DEFAULT.channels.items() if rules.seen_bias
 }
 
 

@@ -210,6 +210,8 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         Column("processed_at", DateTime(timezone=True)),
         Column("attempts", Integer, nullable=False, server_default="0"),
         Column("error", Text),
+        # A turn that failed for a passing reason waits until then (`meydan.runtime.failures`).
+        Column("retry_at", DateTime(timezone=True)),
         # Idempotent Receiver: channels deliver at least once.
         UniqueConstraint("channel", "message_id"),
     )

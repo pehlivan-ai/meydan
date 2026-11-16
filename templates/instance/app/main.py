@@ -8,8 +8,9 @@ import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 from meydan.channels.whatsapp import WhatsAppCloud
 from meydan.runtime import Runtime, RuntimeConfig, templates
 from meydan.runtime.types import Channel
@@ -69,7 +70,12 @@ def create_app(
     app.include_router(webhook.routes(env, runtime))
 
     @app.get("/health")
-    def health() -> dict[str, str]:
-        return {"status": "ok"}
+    def health(response: Response) -> dict[str, object]:
+        """503 when due work is not being done (a message nobody took, a reply nobody sent):
+        the deploy's health check then rolls back or restarts. Turns put off on purpose are not
+        counted (meydan's docs/failures.md)."""
+        h = runtime.health()
+        response.status_code = 200 if h.ok else 503
+        return {"status": "ok" if h.ok else "stuck", **asdict(h)}
 
     return app

@@ -14,14 +14,30 @@ is rows (`meydan.runtime.transcript`). This module is the one place that knows P
   context manager still sees the exception, so it can roll back.
 - `history(lines)` turns a transcript into model messages: what the person said as requests,
   what we sent as responses, consecutive lines of one side merged, starting with the person.
+- `handler(agent, ...)` is an agent as a turn handler: what every app wrote around its agent
+  (three apps, three copies), with what was learned doing it built in:
 
-Requires the `llm` extra.
+      reply = handler(agent, engine=engine, tables=tables, clock=clock,
+                      deps=lambda turn: Deps(turn), now=lambda turn: ["Today's lessons: ..."])
+      runtime = Runtime(engine, tables, channel, reply)
+
+  It reads the conversation's transcript as history, runs the agent with a time limit, records
+  the turn's model calls (`meydan.observe`), and sends the reply's bubbles (`meydan.reply`).
+  What is true only now (the time, today's facts) goes at the very end of the new message, never
+  into the instructions: a provider reuses a request up to the first place where it differs from
+  the one before (prompt caching), and the instructions come before the whole conversation.
+  Measured: with the time in the instructions, a turn's first call read 384 tokens from the
+  cache; with it at the end, about 1,536. Tell the model about that block with `NOW_NOTE`.
+
+Requires the `llm` extra (and `runtime`, for `handler`).
 """
 
+import asyncio
 import functools
 import inspect
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import AbstractContextManager
+from datetime import datetime
 from typing import Any
 
 from pydantic_ai import RunContext
@@ -33,6 +49,8 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
+from meydan.channels.base import Outbound
+from meydan.clock import Clock
 from meydan.runtime.conversation import Said
 from meydan.tools import ToolContext, ToolError
 
@@ -80,3 +98,94 @@ def history(lines: Iterable[Said]) -> list[ModelMessage]:
     while messages and isinstance(messages[0], ModelResponse):
         messages.pop(0)  # a history starts with the person speaking
     return messages
+
+
+# For the agent's instructions: what the block at the end of each message is.
+NOW_NOTE = (
+    "Each of the person's messages ends with a block in parentheses that the system adds: the "
+    "time now, and what is true at this moment. They did not write it; never mention or repeat "
+    "it as such. It is always current: when it differs from something said earlier in the "
+    "conversation, it is right and the earlier message is out of date."
+)
+NO_TEXT = "(a message with no text: a photo, a voice note)"
+
+
+class AgentHandler:
+    """An agent as a turn handler. Built by `handler`; call it with a turn, as the runtime does.
+
+    For tests and evals, `run(turn, history)` runs the agent without the database, and
+    `prompt(turn)` and `messages(output, turn)` are what a turn is given and what it sends."""
+
+    def __init__(
+        self,
+        agent: Any,
+        *,
+        engine: Any = None,
+        tables: Any = None,
+        deps: Callable[[Any], Any] = lambda turn: turn,
+        clock: Clock | None = None,
+        now: Callable[[Any], Sequence[str]] | None = None,
+        messages: Callable[[Any, Any], list[Outbound]] | None = None,
+        history_lines: int = 30,
+        timeout_s: float = 45,
+        since: Callable[[Any], datetime | None] | None = None,
+    ):
+        self.agent = agent
+        self.engine, self.tables = engine, tables
+        self.deps, self.clock, self.now = deps, clock, now
+        self._messages = messages
+        self.history_lines, self.timeout_s, self.since = history_lines, timeout_s, since
+
+    def prompt(self, turn: Any) -> str:
+        """What the model reads for this turn: what the person wrote, then what is true now."""
+        lines = []
+        if self.clock is not None:
+            lines.append(f"Now ({self.clock.zone}): {self.clock.format_datetime(self.clock.now())}")
+        if self.now is not None:
+            lines.extend(self.now(turn))
+        text = turn.text or NO_TEXT
+        return f"{text}\n\n(" + "\n".join(lines) + ")" if lines else text
+
+    def messages(self, output: Any, turn: Any) -> list[Outbound]:
+        """What a reply sends: its bubbles, or what the app makes of its output."""
+        if self._messages is not None:
+            return self._messages(output, turn)
+        return output.outbound()
+
+    def history(self, turn: Any) -> list[ModelMessage]:
+        """The conversation so far, as the model is given it. None without a database."""
+        if self.engine is None:
+            return []
+        from meydan.runtime.conversation import transcript  # noqa: PLC0415
+
+        with self.engine.connect() as conn:
+            lines = transcript(conn, self.tables, turn.conversation_id, self.history_lines)
+        start = self.since(turn) if self.since is not None else None
+        return history([line for line in lines if start is None or line.at > start])
+
+    async def run(self, turn: Any, history: Sequence[ModelMessage] = ()) -> Any:
+        """One run of the agent for this turn, with a time limit; records its model calls."""
+        from meydan import observe  # noqa: PLC0415
+
+        async with asyncio.timeout(self.timeout_s):
+            result = await self.agent.run(
+                self.prompt(turn), deps=self.deps(turn), message_history=list(history)
+            )
+        observe.record_run(result)
+        return result
+
+    async def __call__(self, turn: Any) -> list[Outbound]:
+        past = await asyncio.to_thread(self.history, turn)
+        result = await self.run(turn, past)
+        return self.messages(result.output, turn)
+
+
+def handler(agent: Any, **options: Any) -> AgentHandler:
+    """`agent` (a Pydantic AI agent whose output is a `meydan.reply.Reply`) as a turn handler.
+
+    Options: `engine` and `tables` (history from the transcript; left out: none), `deps(turn)`
+    (what the agent's tools are given; left out: the turn), `clock` (the time now, at the end of
+    each message), `now(turn)` (more lines that are true only now, read on every turn),
+    `messages(output, turn)` (what a reply sends; left out: its bubbles), `history_lines`,
+    `timeout_s`, `since(turn)` (no history before this moment)."""
+    return AgentHandler(agent, **options)

@@ -86,11 +86,12 @@ class Clock:
             return self.format_date(start)
         return f"{self.format_date(start)} – {self.format_date(last)}"
 
-    def calendar(self, days: int = 14) -> list[str]:
-        """The next `days` dates from today: ['2026-10-26 26 Ekim Pazartesi', ...].
+    def calendar(self, days: int = 14, start: date | None = None) -> list[str]:
+        """`days` dates from `start` (today when left out): ['2026-10-26 26 Ekim Pazartesi', ...].
 
-        For agent context: the ISO date is for tool arguments, the text for replies.
+        For agent context: the ISO date is for tool arguments, the text for replies. Start it
+        before today (e.g. this week's Monday) when people refer to days that already passed.
         """
-        start = self.today()
+        start = start or self.today()
         dates = (start + timedelta(days=i) for i in range(days))
         return [f"{d.isoformat()} {self.format_date(d)}" for d in dates]
