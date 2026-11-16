@@ -10,10 +10,16 @@ permissions:
 
 jobs:
   test:
+    # Every Postgres meydan supports (docs: "Postgres 16+"): a promise not run is not kept.
+    strategy:
+      fail-fast: false
+      matrix:
+        postgres: ["16", "17", "18"]
+    name: test (postgres ${{ matrix.postgres }})
     runs-on: ubuntu-latest
     services:
       db:
-        image: postgres:18
+        image: postgres:${{ matrix.postgres }}
         env:
           POSTGRES_USER: meydan
           POSTGRES_PASSWORD: meydan

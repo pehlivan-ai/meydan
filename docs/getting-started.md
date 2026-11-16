@@ -7,7 +7,7 @@ Two ways to work with meydan. Pick the one you are doing now.
 | an **app developer** | an app that answers people on WhatsApp, built from meydan's parts | [Build an app](#build-an-app) |
 | a **framework developer** | to change meydan itself | [Work on meydan](#work-on-meydan) |
 
-Both need [uv](https://docs.astral.sh/uv/) and a Postgres 18 (Docker, or a local one).
+Both need [uv](https://docs.astral.sh/uv/) and a Postgres 16 or newer (Docker, or a local one).
 
 ## Build an app
 
@@ -82,7 +82,7 @@ uv run pytest                # 118 pass; 7 need OpenFGA and are skipped without 
 uv run ruff check . && uv run ruff format --check .
 ```
 
-- Another Postgres 18: `MEYDAN_TEST_DATABASE_URL=postgresql+psycopg://user:pass@host/db`.
+- Another Postgres (16 or newer): `MEYDAN_TEST_DATABASE_URL=postgresql+psycopg://user:pass@host/db`.
 - The access tests: `docker run -d --name meydan-fga -p 18080:8080 openfga/openfga:v1.22.0 run`.
 - Rules for a change: [CONTRIBUTING.md](../CONTRIBUTING.md). Design: [architecture.md](architecture.md).
 

@@ -1,4 +1,4 @@
-"""Shared fixtures: a real Postgres 18 (advisory locks, SKIP LOCKED, uuidv7) and a fake channel.
+"""Shared fixtures: a real Postgres 16+ (advisory locks, SKIP LOCKED) and a fake channel.
 
 Set MEYDAN_TEST_DATABASE_URL, or have a local Postgres with a `meydan_test` database.
 MEYDAN_TEST_REQUIRE=1 (CI) fails instead of skipping when a test service is missing.
@@ -35,9 +35,9 @@ def db():
     engine = create_engine(URL)
     try:
         with engine.connect() as c:
-            c.execute(text("select uuidv7()"))
+            c.execute(text("select 1"))
     except Exception as e:
-        unavailable(f"no Postgres 18 test database: {e}")
+        unavailable(f"no Postgres test database: {e}")
     md = MetaData()
     tables = define_tables(md)
     md.drop_all(engine)

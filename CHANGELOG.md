@@ -6,6 +6,18 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.23.0] - 2026-11-16
+### Changed
+- Postgres 16 and 17 are supported, not only 18: the oldest supported version is now 16. Ids are made by meydan (`meydan.ids.uuid7`: a time-ordered
+  UUID, version 7, RFC 9562, monotonic within a process by a 12-bit counter, section 6.2 method
+  1) instead of Postgres 18's `uuidv7()`, so `ORDER BY id` stays insertion order, a reply's
+  bubbles included. CI runs every test on Postgres 16, 17 and 18. The template's first migration
+  no longer asks the database for ids.
+### Upgrading
+- Nothing to migrate. On Postgres 18 the old `uuidv7()` default stays and does no harm; SQLAlchemy
+  supplies the id. An app that inserts into meydan's tables with raw SQL supplies the id itself
+  (`meydan.ids.uuid7()`).
+
 ## [0.22.0] - 2026-11-16
 ### Added
 - `meydan.reply`: a reply as bubbles, for agents that talk to people on a messaging app. `Reply` is
