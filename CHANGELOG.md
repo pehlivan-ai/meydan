@@ -6,6 +6,15 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.24.1] - 2026-11-16
+### Fixed
+- `templates/instance`: the webhook stores what Meta sent in a thread (`asyncio.to_thread`), not on
+  the event loop it shares with the runtime's reader, worker and sender. A slow commit held every
+  conversation's turn and reply for as long as it took.
+### Upgrading
+- An app made from the template: move the `with runtime.engine.begin()` block of `receive` into a
+  function and `await asyncio.to_thread(...)` it, as the template now does.
+
 ## [0.24.0] - 2026-11-16
 ### Added
 - `handler(agent, said=)`: what the model reads of the person's messages, from the turn. Left out,

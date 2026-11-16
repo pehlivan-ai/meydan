@@ -5,6 +5,7 @@ Cloud API retries undelivered webhooks for days, at least once and unordered: ea
 enters meydan's inbox once (deduplicated on its id), with its raw payload.
 """
 
+import asyncio
 import hmac
 import json
 from typing import Annotated
@@ -37,6 +38,15 @@ def routes(env: Env, runtime: Runtime) -> APIRouter:
             raise HTTPException(status_code=403)
         return challenge
 
+    def store(payload: dict) -> None:
+        with runtime.engine.begin() as conn:
+            runtime.receive(
+                conn,
+                parse_messages(payload),
+                parse_statuses(payload),
+                parse_template_updates(payload),
+            )
+
     @router.post("")
     async def receive(request: Request) -> dict[str, str]:
         body = await request.body()
@@ -45,13 +55,9 @@ def routes(env: Env, runtime: Runtime) -> APIRouter:
         ):
             raise HTTPException(status_code=401)
         payload = json.loads(body)
-        with runtime.engine.begin() as conn:
-            runtime.receive(
-                conn,
-                parse_messages(payload),
-                parse_statuses(payload),
-                parse_template_updates(payload),
-            )
+        # Database work runs in a thread, never on the event loop: the loop also runs the
+        # runtime's reader, worker and sender, and one slow commit must not hold them all.
+        await asyncio.to_thread(store, payload)
         return {"status": "ok"}
 
     return router
