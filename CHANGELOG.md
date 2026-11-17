@@ -6,6 +6,18 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.25.0] - 2026-11-17
+### Added
+- `meydan.llm`: `vertex-openai:<publisher>/<model>[@location]`, a partner or open model on Vertex
+  AI (Model as a Service: DeepSeek, Llama, Qwen, ...) through its OpenAI-compatible endpoint, e.g.
+  `vertex-openai:deepseek-ai/deepseek-v4.1-flash-maas@global`. Google's default credentials (a
+  service account on a VM, `gcloud auth application-default login` on a laptop): no API key; the
+  token is refreshed before it ends. Same retries, timeouts and concurrency limits as the others.
+  Needs `MEYDAN_LLM_GCP_PROJECT`. Measured: the endpoint wants `<publisher>/<model>`; a bare model
+  name is refused (400), and meydan refuses it first.
+### Upgrading
+- Nothing to migrate.
+
 ## [0.24.1] - 2026-11-16
 ### Fixed
 - `templates/instance`: the webhook stores what Meta sent in a thread (`asyncio.to_thread`), not on

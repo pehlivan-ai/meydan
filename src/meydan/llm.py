@@ -5,6 +5,13 @@ not a code change:
 
     openrouter:deepseek/deepseek-v4.1-flash
     vertex:gemini-3-flash-preview@global
+    vertex-openai:deepseek-ai/deepseek-v4.1-flash-maas@global
+
+`vertex:` is Gemini through Google's own API. `vertex-openai:` is a partner or open model on
+Vertex AI (Model as a Service: DeepSeek, Llama, Qwen, ...) through its OpenAI-compatible
+endpoint; the name is `<publisher>/<model>` as the model's page gives it. Both authenticate with
+Google's default credentials (a service account on a VM, `gcloud auth application-default login`
+on a laptop): no API key, and a token is refreshed before it ends.
 
 Every model gets the same resilience stack, outermost first:
 
@@ -29,8 +36,10 @@ from pydantic_ai import ConcurrencyLimitedModel, ConcurrencyLimiter
 from pydantic_ai.models import Model
 from pydantic_ai.models.fallback import FallbackModel
 from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.models.openai import OpenAIChatModel
 from pydantic_ai.models.openrouter import OpenRouterModel, OpenRouterModelSettings
 from pydantic_ai.providers.google_cloud import GoogleCloudProvider
+from pydantic_ai.providers.openai import OpenAIProvider
 from pydantic_ai.providers.openrouter import OpenRouterProvider
 from pydantic_ai.retries import AsyncTenacityTransport, RetryConfig, wait_retry_after
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -43,6 +52,42 @@ from tenacity import (
 
 RETRYABLE_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+
+
+class GoogleAuth(httpx.Auth):
+    """A bearer token from Google's default credentials, refreshed before it ends."""
+
+    def __init__(self) -> None:
+        import google.auth
+
+        self.credentials, _ = google.auth.default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+
+    def _token(self) -> str:
+        from google.auth.transport.requests import Request
+
+        if not self.credentials.valid:
+            self.credentials.refresh(Request())
+        return self.credentials.token
+
+    def sync_auth_flow(self, request: httpx.Request):
+        request.headers["Authorization"] = f"Bearer {self._token()}"
+        yield request
+
+    async def async_auth_flow(self, request: httpx.Request):
+        if not self.credentials.valid:
+            import asyncio
+
+            await asyncio.to_thread(self._token)  # a refresh is a blocking HTTP call
+        request.headers["Authorization"] = f"Bearer {self.credentials.token}"
+        yield request
+
+
+def vertex_openai_url(project: str, location: str) -> str:
+    host = "aiplatform.googleapis.com"
+    host = host if location == "global" else f"{location}-{host}"
+    return f"https://{host}/v1/projects/{project}/locations/{location}/endpoints/openapi"
 
 
 class LLMSettings(BaseSettings):
@@ -70,7 +115,7 @@ class LLMSettings(BaseSettings):
         "require_parameters": True,
         "allow_fallbacks": True,
     }
-    gcp_project: str | None = None  # for vertex: specs
+    gcp_project: str | None = None  # for vertex: and vertex-openai: specs
 
 
 def parse_spec(spec: str) -> tuple[str, str, str | None]:
@@ -124,12 +169,21 @@ class LLM:
         self.settings = settings or LLMSettings()
         self._limiters: dict[str, ConcurrencyLimiter] = {}
 
-    @cached_property
-    def http_client(self) -> httpx.AsyncClient:
+    def _client(self, auth: httpx.Auth | None = None) -> httpx.AsyncClient:
         return httpx.AsyncClient(
             transport=retrying_transport(self.settings),
             timeout=httpx.Timeout(self.settings.request_timeout_s, connect=5, pool=10),
+            auth=auth,
         )
+
+    @cached_property
+    def http_client(self) -> httpx.AsyncClient:
+        return self._client()
+
+    @cached_property
+    def google_http_client(self) -> httpx.AsyncClient:
+        """The same stack, with a Google bearer token on every request (vertex-openai:)."""
+        return self._client(auth=GoogleAuth())
 
     def _limiter(self, provider: str) -> ConcurrencyLimiter:
         if provider not in self._limiters:
@@ -167,6 +221,19 @@ class LLM:
         )
         return GoogleModel(name, provider=provider)
 
+    def _vertex_openai(self, name: str, location: str | None) -> Model:
+        if not self.settings.gcp_project:
+            raise RuntimeError("MEYDAN_LLM_GCP_PROJECT is not set (needed for vertex-openai:).")
+        if "/" not in name:
+            raise ValueError(f"vertex-openai: needs '<publisher>/<model>', got {name!r}.")
+        client = AsyncOpenAI(
+            base_url=vertex_openai_url(self.settings.gcp_project, location or "global"),
+            api_key="google-default-credentials",  # replaced per request by GoogleAuth
+            http_client=self.google_http_client,
+            max_retries=0,  # retries live in the transport, not here as well
+        )
+        return OpenAIChatModel(name, provider=OpenAIProvider(openai_client=client))
+
     def model(self, spec: str) -> Model:
         """One spec, with concurrency limiting and HTTP retries (no fallback)."""
         provider, name, location = parse_spec(spec)
@@ -174,6 +241,8 @@ class LLM:
             model = self._openrouter(name)
         elif provider == "vertex":
             model = self._vertex(name, location)
+        elif provider == "vertex-openai":
+            model = self._vertex_openai(name, location)
         else:
             raise ValueError(f"Unknown model provider {provider!r} in {spec!r}.")
         return ConcurrencyLimitedModel(model, limiter=self._limiter(provider))
