@@ -85,3 +85,62 @@ def test_missing_key_is_a_clear_error():
     llm = LLM(LLMSettings(model="openrouter:x/y", openrouter_api_key=""))
     with pytest.raises(RuntimeError, match="OPENROUTER_API_KEY"):
         llm.get_model()
+
+
+def test_vertex_openai_spec_names_a_publisher_model_and_a_location():
+    assert parse_spec("vertex-openai:deepseek-ai/deepseek-v4.1-flash-maas@global") == (
+        "vertex-openai",
+        "deepseek-ai/deepseek-v4.1-flash-maas",
+        "global",
+    )
+
+
+def test_vertex_openai_url_is_global_or_regional():
+    from meydan.llm import vertex_openai_url
+
+    assert vertex_openai_url("p", "global") == (
+        "https://aiplatform.googleapis.com/v1/projects/p/locations/global/endpoints/openapi"
+    )
+    assert vertex_openai_url("p", "europe-west4") == (
+        "https://europe-west4-aiplatform.googleapis.com/v1/projects/p/locations/europe-west4"
+        "/endpoints/openapi"
+    )
+
+
+def test_vertex_openai_refuses_a_name_without_its_publisher_and_needs_a_project():
+    import pytest
+
+    llm = LLM(LLMSettings(model="x:y", gcp_project="p"))
+    with pytest.raises(ValueError, match="publisher"):
+        llm.model("vertex-openai:deepseek-v4.1-flash-maas")
+    with pytest.raises(RuntimeError, match="GCP_PROJECT"):
+        LLM(LLMSettings(model="x:y")).model("vertex-openai:deepseek-ai/x")
+
+
+async def test_google_auth_puts_a_fresh_bearer_on_each_request():
+    import httpx
+
+    from meydan.llm import GoogleAuth
+
+    class Creds:
+        def __init__(self):
+            self.valid, self.token, self.refreshed = False, None, 0
+
+        def refresh(self, request):
+            self.refreshed += 1
+            self.valid, self.token = True, f"t{self.refreshed}"
+
+    auth = GoogleAuth.__new__(GoogleAuth)
+    auth.credentials = Creds()
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request.headers["Authorization"])
+        return httpx.Response(200)
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler), auth=auth) as c:
+        await c.get("https://x/a")
+        await c.get("https://x/b")  # still valid: no second refresh
+        auth.credentials.valid = False  # expired
+        await c.get("https://x/c")
+    assert seen == ["Bearer t1", "Bearer t1", "Bearer t2"]
