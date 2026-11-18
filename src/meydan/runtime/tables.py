@@ -432,6 +432,9 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         Column("upcoming_category", String(30)),
         Column("quality", String(20)),
         Column("reason", Text),
+        # What it says (from the channel's list): the body with placeholders, the buttons' labels.
+        Column("body", Text),
+        Column("buttons", JSONB),
         Column("status_at", DateTime(timezone=True)),  # channel time of the status we keep
         now_col("updated_at"),
         UniqueConstraint("channel", "name", "language"),

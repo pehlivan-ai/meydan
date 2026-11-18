@@ -78,6 +78,10 @@ class TemplateUpdate:
     upcoming_category: str | None = None  # announced change, e.g. to MARKETING in 24 hours
     quality: str | None = None  # GREEN | YELLOW | RED | UNKNOWN
     reason: str | None = None  # why it was rejected or paused, in the channel's words
+    # What it says, for showing a sent one in a thread: the body with its placeholders
+    # ({{name}} or {{1}}), and the buttons' labels. None: the event doesn't say.
+    body: str | None = None
+    buttons: tuple[str, ...] | None = None
 
 
 @dataclass(frozen=True)

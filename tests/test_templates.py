@@ -160,3 +160,24 @@ async def test_list_templates_follows_pages():
     found = await cloud.list_templates("waba")
     assert [(t.name, t.status, t.quality) for t in found] == [
         ("a", "APPROVED", "GREEN"), ("b", "PENDING", None)]  # fmt: skip
+
+
+async def test_list_templates_keeps_the_body_and_buttons():
+    """So a thread can show what a template said, not an empty bubble."""
+    page = {"data": [{
+        "id": "3", "name": "reminder", "language": "tr", "status": "APPROVED",
+        "category": "UTILITY",
+        "components": [
+            {"type": "BODY", "text": "Your {{group}} lesson is tomorrow at {{time}}. Coming?"},
+            {"type": "BUTTONS", "buttons": [{"type": "QUICK_REPLY", "text": "Yes"},
+                                            {"type": "QUICK_REPLY", "text": "Not this week"}]},
+        ]}], "paging": {}}  # fmt: skip
+    cloud = WhatsAppCloud(
+        "token",
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(lambda r: httpx.Response(200, json=page))
+        ),
+    )
+    [found] = await cloud.list_templates("waba")
+    assert found.body == "Your {{group}} lesson is tomorrow at {{time}}. Coming?"
+    assert found.buttons == ("Yes", "Not this week")

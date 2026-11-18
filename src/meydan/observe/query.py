@@ -235,6 +235,36 @@ def conversations(
     return rows
 
 
+def _template_words(conn: Connection, t: RuntimeTables, channel: str, outs) -> dict:
+    """(name, language) -> (category, body, buttons) for the templates these messages used."""
+    used = {(m.get("template"), m.get("language")) for m in (r.message or {} for r in outs)}
+    used.discard((None, None))
+    if not used:
+        return {}
+    tp = t.templates
+    rows = conn.execute(
+        select(tp.c.name, tp.c.language, tp.c.category, tp.c.body, tp.c.buttons).where(
+            tp.c.channel == channel, tp.c.name.in_({n for n, _ in used})
+        )
+    )
+    return {(r.name, r.language): (r.category, r.body, r.buttons or []) for r in rows}
+
+
+def _said(message: dict, words: dict) -> dict:
+    """What a sent message said: its text, or a template's body filled with its parameters."""
+    name = message.get("template")
+    if not name:
+        return {"text": message.get("text")}
+    category, body, buttons = words.get((name, message.get("language")), (None, None, []))
+    if category == "AUTHENTICATION" or message.get("otp") is not None:
+        return {"text": None, "template": name, "buttons": []}  # a code: never its words
+    text = body
+    if text is not None:
+        for key, value in (message.get("params") or {}).items():
+            text = text.replace("{{" + str(key) + "}}", str(value))
+    return {"text": text, "template": name, "buttons": list(buttons)}
+
+
 def _delivery(r) -> str:
     if r.read_at is not None:
         return "read"
@@ -310,6 +340,10 @@ class Line(BaseModel):
     # Ours only: pending | held | sent | delivered | read | failed | dead (receipts win over the
     # send status: a read message was delivered).
     status: str | None = None
+    # A template we sent: its name, its body filled with this message's parameters (`text`), and
+    # its buttons. An authentication template (a one-time code) shows no words at all.
+    template: str | None = None
+    buttons: list[str] = []
 
 
 class TurnView(BaseModel):
@@ -389,16 +423,17 @@ def conversation(
              author="person")
         for r in ins
     ]  # fmt: skip
+    words = _template_words(conn, t, head.channel, outs)
     lines += [
         Line(
             id=f"out:{r.id}",
             at=r.created_at,
             direction="out",
-            text=(r.message or {}).get("text"),
             turn_id=r.turn_id,
             author=r.author,
             author_id=r.author_actor_id,
             status=_delivery(r),
+            **_said(r.message or {}, words),
         )
         for r in outs
     ]

@@ -43,6 +43,8 @@ def record(conn: Connection, t: RuntimeTables, update_: TemplateUpdate) -> None:
         "upcoming_category": update_.upcoming_category,
         "quality": update_.quality,
         "reason": update_.reason,
+        "body": update_.body,
+        "buttons": list(update_.buttons) if update_.buttons is not None else None,
         "status_at": update_.at if status else None,
     }
     stmt = pg_insert(tp).values(values)
@@ -69,6 +71,8 @@ def record(conn: Connection, t: RuntimeTables, update_: TemplateUpdate) -> None:
                 latest("upcoming_category"),
             ),
             "quality": latest("quality"),
+            "body": latest("body"),
+            "buttons": latest("buttons"),
             "updated_at": func.now(),
         },
     )

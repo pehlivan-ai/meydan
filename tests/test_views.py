@@ -214,3 +214,32 @@ async def test_the_list_shows_the_last_message_and_who_wrote_it_redacted_like_th
     assert bora_row.last_text is None and bora_row.last_author is not None  # text needs its scope
     full = read(rt, query.conversations, who(anna, "conversations:read:all", "messages:read"))
     assert next(r for r in full if r.actor_id != anna).last_text is not None
+
+
+async def test_a_template_shows_what_it_said_and_a_code_never_shows(world):
+    from meydan.channels.base import TemplateUpdate
+    from meydan.runtime import templates as tpl
+
+    rt, anna, _ = world
+    conv = read(rt, query.conversations, who(anna))[0].id
+    with rt.engine.begin() as c:
+        for name, category, body in (
+            ("reminder", "UTILITY", "Your {{group}} lesson is at {{time}}. Coming?"),
+            ("signin", "AUTHENTICATION", "{{1}} is your code."),
+        ):
+            update = TemplateUpdate(
+                "whatsapp", "waba", name, "tr", T0,
+                status="APPROVED", category=category, body=body, buttons=("Yes", "No"),
+            )  # fmt: skip
+            tpl.record(c, rt.t, update)
+        reminder = Outbound.template_message("reminder", "tr", buttons=("y", "n"),
+                                             group="Mini", time="18:00")  # fmt: skip
+        code = Outbound.code_message("signin", "tr", "123456")
+        rt.enqueue(c, channel="whatsapp", conversation_id=conv, from_number="15550000000",
+                   to=ANNA, messages=[reminder, code])  # fmt: skip
+    lines = read(rt, query.conversation, who(anna), conv).lines
+    shown = [(ln.template, ln.text, ln.buttons) for ln in lines if ln.template]
+    assert shown == [
+        ("reminder", "Your Mini lesson is at 18:00. Coming?", ["Yes", "No"]),
+        ("signin", None, []),  # a code is never shown, not even its template's words
+    ]
