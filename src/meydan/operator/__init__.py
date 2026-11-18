@@ -1,21 +1,26 @@
-"""The desk: people on the team working the conversations next to the agent.
+"""The operator: a person on the team stepping into a conversation the agent is having.
 
-Read state, taking a conversation over and handing it back, and writing to someone as yourself.
-The core has no web framework (like `meydan.auth`); `meydan.desk.web` (extra `api`) serves it.
+The vocabulary, by who starts it:
+
+- **takeover** (a person starts it): they take the conversation over; while it holds, the agent
+  does not answer it (the runtime's worker checks, `is_taken_over`), and every message is still
+  received and recorded. A takeover has an end (`until`) or lasts until handed back.
+- **handback** (a person starts it): they give it back to the agent.
+- **handoff** (the machine starts it): the agent hands a conversation to a person. Not built yet.
+
+And next to it:
 
 - **Reading.** Each reader has a mark per conversation (`seen_until`); what came in after it is
   unread. A reader is a principal as text: a person's actor id, or, for a service key, whom the
-  service reads for (`Principal.on_behalf_of`) — so a dashboard's users each keep their own marks.
-- **Holding.** A conversation a person takes over is held: the agent does not answer it (the
-  runtime's worker checks, `is_held`), while every message is still received and recorded. A hold
-  has an end (`until`) or lasts until handed back (`release`).
-- **Writing.** A person on the team writes as themselves: the message is queued with
-  `author="staff"` and their actor, so every reader sees who wrote it. On channels with a
-  customer-service window (WhatsApp: 24 hours after their last message) a free-form message is
-  refused once the window has closed (`WindowClosedError`); a template is the way back.
+  service acts for (`Principal.on_behalf_of`), so a dashboard's users each keep their own marks.
+- **Writing.** A person writes as themselves: the message is queued with `author="staff"` and
+  their actor, so every reader sees who wrote it. On channels with a customer-service window
+  (WhatsApp: 24 hours after their last message) free text is refused once it has closed
+  (`WindowClosedError`); a template is the way back.
 
 Staff are actors too. A person known to another application (a dashboard's user) gets an actor
 here through an identity in that application (`staff_actor`): scheme "staff", their id there.
+The core has no web framework (like `meydan.auth`); `meydan.operator.web` (extra `api`) serves it.
 """
 
 import uuid
@@ -42,8 +47,8 @@ class NotFoundError(Exception):
 
 
 @dataclass(frozen=True)
-class Hold:
-    held_by: str
+class Takeover:
+    taken_by: str
     until: datetime | None  # None: until handed back
     at: datetime
 
@@ -55,7 +60,7 @@ def mark_read(
     conn: Connection, t: RuntimeTables, conversation_id: uuid.UUID, reader: str
 ) -> datetime:
     """This reader has seen everything that came in so far. Returns the mark (never moves back)."""
-    r = t.desk_reads
+    r = t.operator_reads
     now = conn.scalar(select(func.now()))
     stmt = insert(r).values(conversation_id=conversation_id, reader=reader[:200], seen_until=now)
     conn.execute(
@@ -73,7 +78,7 @@ def unread(
     """How many of their messages each conversation has that this reader hasn't seen."""
     if not conversation_ids:
         return {}
-    i, r = t.inbox, t.desk_reads
+    i, r = t.inbox, t.operator_reads
     mark = (
         select(r.c.seen_until)
         .where(r.c.conversation_id == i.c.conversation_id, r.c.reader == reader[:200])
@@ -93,20 +98,20 @@ def unread(
 # --- holding -------------------------------------------------------------------------------
 
 
-def hold(
+def takeover(
     conn: Connection,
     t: RuntimeTables,
     conversation_id: uuid.UUID,
-    held_by: str,
+    taken_by: str,
     for_: timedelta | None = None,
-) -> Hold:
-    """Take a conversation over: the agent stops answering it, for `for_` or until `release`."""
-    h = t.desk_holds
+) -> Takeover:
+    """Take a conversation over: the agent stops answering it, for `for_` or until `handback`."""
+    h = t.operator_holds
     now = conn.scalar(select(func.now()))
     until = now + for_ if for_ is not None else None
     values = {
         "conversation_id": conversation_id,
-        "held_by": held_by[:200],
+        "taken_by": taken_by[:200],
         "until": until,
         "at": now,
     }
@@ -114,42 +119,42 @@ def hold(
     conn.execute(
         stmt.on_conflict_do_update(
             index_elements=[h.c.conversation_id],
-            set_={"held_by": stmt.excluded.held_by, "until": stmt.excluded.until, "at": now},
+            set_={"taken_by": stmt.excluded.taken_by, "until": stmt.excluded.until, "at": now},
         )
     )
-    return Hold(held_by[:200], until, now)
+    return Takeover(taken_by[:200], until, now)
 
 
-def release(conn: Connection, t: RuntimeTables, conversation_id: uuid.UUID) -> bool:
-    """Hand it back to the agent. False: it wasn't held."""
-    h = t.desk_holds
+def handback(conn: Connection, t: RuntimeTables, conversation_id: uuid.UUID) -> bool:
+    """Hand it back to the agent. False: it wasn't taken over."""
+    h = t.operator_holds
     return bool(conn.execute(h.delete().where(h.c.conversation_id == conversation_id)).rowcount)
 
 
-def holding(conn: Connection, t: RuntimeTables, conversation_id: uuid.UUID) -> Hold | None:
+def takeover_of(conn: Connection, t: RuntimeTables, conversation_id: uuid.UUID) -> Takeover | None:
     """The hold on a conversation, if one is in force now."""
-    found = holds(conn, t, [conversation_id])
+    found = takeovers(conn, t, [conversation_id])
     return found.get(conversation_id)
 
 
-def holds(
+def takeovers(
     conn: Connection, t: RuntimeTables, conversation_ids: list[uuid.UUID]
-) -> dict[uuid.UUID, Hold]:
+) -> dict[uuid.UUID, Takeover]:
     if not conversation_ids:
         return {}
-    h = t.desk_holds
+    h = t.operator_holds
     rows = conn.execute(
         select(h).where(
             h.c.conversation_id.in_(conversation_ids),
             (h.c.until.is_(None)) | (h.c.until > func.now()),
         )
     )
-    return {r.conversation_id: Hold(r.held_by, r.until, r.at) for r in rows}
+    return {r.conversation_id: Takeover(r.taken_by, r.until, r.at) for r in rows}
 
 
-def is_held(conn: Connection, t: RuntimeTables, conversation_id: uuid.UUID) -> bool:
-    """For the worker: a held conversation gets no answer from the agent."""
-    return holding(conn, t, conversation_id) is not None
+def is_taken_over(conn: Connection, t: RuntimeTables, conversation_id: uuid.UUID) -> bool:
+    """For the worker: a conversation taken over gets no answer from the agent."""
+    return takeover_of(conn, t, conversation_id) is not None
 
 
 # --- staff and writing ---------------------------------------------------------------------
@@ -177,14 +182,14 @@ def send(
     text: str,
     by: uuid.UUID,
     *,
-    hold_for: timedelta | None = timedelta(minutes=30),
-    held_by: str | None = None,
+    take_over_for: timedelta | None = timedelta(minutes=30),
+    taken_by: str | None = None,
 ) -> uuid.UUID:
     """A person on the team writes `text` in a conversation, as themselves (`by`, an actor).
 
     It goes to whoever wrote last, from the endpoint they wrote to, queued like any message (paced,
-    retried, its delivery recorded). Writing takes the conversation over for `hold_for` (None: no
-    hold), so the agent doesn't answer over them. Raises NotFoundError (nobody to answer) or
+    retried, its delivery recorded). Writing takes it over for `take_over_for` (None: not),
+    so the agent doesn't answer over them. Raises NotFoundError (nobody to answer) or
     WindowClosedError (the channel's free-form window has closed). Returns the turn id."""
     t = runtime.t
     i = t.inbox
@@ -210,6 +215,6 @@ def send(
         author="staff",
         author_actor_id=by,
     )
-    if hold_for is not None:
-        hold(conn, t, conversation_id, held_by or str(by), hold_for)
+    if take_over_for is not None:
+        takeover(conn, t, conversation_id, taken_by or str(by), take_over_for)
     return turn

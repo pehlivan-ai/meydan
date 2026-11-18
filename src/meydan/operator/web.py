@@ -1,11 +1,11 @@
-"""The desk's HTTP surface (extra `api`): FastAPI routes over `meydan.desk`.
+"""The operator's HTTP surface (extra `api`): FastAPI routes over `meydan.operator`.
 
-    app.include_router(desk_routes(auth, runtime, labels=...), prefix="/desk")
+    app.include_router(operator_routes(auth, runtime, labels=...), prefix="/operator")
 
-Reads need the operator surface and every conversation (`ops`, `conversations:read:all`); writes
-(hold, release, messages) also need `desk:write`. Who is acting is the principal: a person's own
-session, or a service key reading and writing for someone (`X-On-Behalf-Of`), whose id keeps their
-own read marks and is recorded on what they do.
+Reads need the operator surface and every conversation (`ops`, `conversations:read:all`);
+writes (takeover, handback, messages) also need `operator:write`. Who is acting is the principal:
+a person's own session, or a service key reading and writing for someone (`X-On-Behalf-Of`),
+whose id keeps their own read marks and is recorded on what they do.
 
 `labels` is the app's own words about the people in the list (a role, a registered name): a
 function from actor ids to a dict per actor, shown as given. meydan knows nothing of them.
@@ -20,7 +20,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from meydan import desk
+from meydan import operator
 from meydan.auth.core import Principal
 from meydan.auth.web import Auth
 from meydan.observe import query
@@ -28,20 +28,20 @@ from meydan.observe.query import NEED_TO_KNOW, ConversationRow
 from meydan.visibility import Visibility
 
 READ = ("ops", "conversations:read:all")
-WRITE = "desk:write"
+WRITE = "operator:write"
 
 Labels = Callable[[list[uuid.UUID]], dict[uuid.UUID, dict[str, Any]]]
 
 
-class DeskRow(ConversationRow):
+class OperatorRow(ConversationRow):
     unread: int = 0
-    held_by: str | None = None
-    held_until: datetime | None = None
-    held: bool = False
+    taken_by: str | None = None
+    taken_until: datetime | None = None
+    taken_over: bool = False
     labels: dict[str, Any] = {}
 
 
-class HoldRequest(BaseModel):
+class TakeoverRequest(BaseModel):
     minutes: int | None = Field(default=None, ge=1, le=7 * 24 * 60)  # None: until handed back
 
 
@@ -54,7 +54,7 @@ class MessageRequest(BaseModel):
 
 class Sent(BaseModel):
     turn_id: uuid.UUID
-    held_until: datetime | None
+    taken_until: datetime | None
 
 
 def reader(person: Principal) -> str:
@@ -68,9 +68,9 @@ def routes(
     *,
     labels: Labels | None = None,
     visibility: Visibility = NEED_TO_KNOW,
-    hold_after_writing: timedelta | None = timedelta(minutes=30),
+    take_over_after_writing: timedelta | None = timedelta(minutes=30),
 ) -> APIRouter:
-    router = APIRouter(tags=["desk"])
+    router = APIRouter(tags=["operator"])
     reads = Annotated[Principal, Depends(auth.require(*READ))]
     writes = Annotated[Principal, Depends(auth.require(*READ, WRITE))]
     engine, t = runtime.engine, runtime.t
@@ -80,28 +80,28 @@ def routes(
             return fn(conn, *args)
 
     @router.get("/conversations")
-    async def conversations(person: reads, limit: int = 100) -> list[DeskRow]:
-        """The conversations, newest first, with this reader's unread count and any hold."""
+    async def conversations(person: reads, limit: int = 100) -> list[OperatorRow]:
+        """The conversations, newest first, with this reader's unread count and any takeover."""
 
         def read(conn):
             rows = query.conversations(conn, t, person, min(limit, 200), visibility=visibility)
             ids = [r.id for r in rows]
-            unread = desk.unread(conn, t, reader(person), ids)
-            held = desk.holds(conn, t, ids)
-            return rows, unread, held
+            unread = operator.unread(conn, t, reader(person), ids)
+            taken = operator.takeovers(conn, t, ids)
+            return rows, unread, taken
 
-        rows, unread, held = await run_in_threadpool(tx, read)
+        rows, unread, taken = await run_in_threadpool(tx, read)
         said = labels([r.actor_id for r in rows if r.actor_id]) if labels else {}
         out = []
         for r in rows:
-            h = held.get(r.id)
+            h = taken.get(r.id)
             out.append(
-                DeskRow(
+                OperatorRow(
                     **r.model_dump(),
                     unread=unread.get(r.id, 0),
-                    held=h is not None,
-                    held_by=h.held_by if h else None,
-                    held_until=h.until if h else None,
+                    taken_over=h is not None,
+                    taken_by=h.taken_by if h else None,
+                    taken_until=h.until if h else None,
                     labels=said.get(r.actor_id, {}) if r.actor_id else {},
                 )
             )
@@ -110,39 +110,43 @@ def routes(
 
     @router.post("/conversations/{conversation_id}/read", status_code=204)
     async def read(person: reads, conversation_id: uuid.UUID) -> None:
-        await run_in_threadpool(tx, lambda c: desk.mark_read(c, t, conversation_id, reader(person)))
-
-    @router.post("/conversations/{conversation_id}/hold")
-    async def hold(person: writes, conversation_id: uuid.UUID, body: HoldRequest) -> desk.Hold:
-        span = timedelta(minutes=body.minutes) if body.minutes else None
-        return await run_in_threadpool(
-            tx, lambda c: desk.hold(c, t, conversation_id, reader(person), span)
+        await run_in_threadpool(
+            tx, lambda c: operator.mark_read(c, t, conversation_id, reader(person))
         )
 
-    @router.post("/conversations/{conversation_id}/release", status_code=204)
-    async def release(person: writes, conversation_id: uuid.UUID) -> None:
-        await run_in_threadpool(tx, lambda c: desk.release(c, t, conversation_id))
+    @router.post("/conversations/{conversation_id}/takeover")
+    async def takeover(
+        person: writes, conversation_id: uuid.UUID, body: TakeoverRequest
+    ) -> operator.Takeover:
+        span = timedelta(minutes=body.minutes) if body.minutes else None
+        return await run_in_threadpool(
+            tx, lambda c: operator.takeover(c, t, conversation_id, reader(person), span)
+        )
+
+    @router.post("/conversations/{conversation_id}/handback", status_code=204)
+    async def handback(person: writes, conversation_id: uuid.UUID) -> None:
+        await run_in_threadpool(tx, lambda c: operator.handback(c, t, conversation_id))
 
     @router.post("/conversations/{conversation_id}/messages")
     async def message(person: writes, conversation_id: uuid.UUID, body: MessageRequest) -> Sent:
         def write(conn):
             by = (
-                desk.staff_actor(conn, t, person.on_behalf_of, body.name)
+                operator.staff_actor(conn, t, person.on_behalf_of, body.name)
                 if person.on_behalf_of
                 else person.actor_id
             )
-            turn = desk.send(
+            turn = operator.send(
                 conn, runtime, conversation_id, body.text, by,
-                hold_for=hold_after_writing, held_by=reader(person),
+                take_over_for=take_over_after_writing, taken_by=reader(person),
             )  # fmt: skip
-            h = desk.holding(conn, t, conversation_id)
-            return Sent(turn_id=turn, held_until=h.until if h else None)
+            h = operator.takeover_of(conn, t, conversation_id)
+            return Sent(turn_id=turn, taken_until=h.until if h else None)
 
         try:
             return await run_in_threadpool(tx, write)
-        except desk.NotFoundError as e:
+        except operator.NotFoundError as e:
             raise HTTPException(status.HTTP_404_NOT_FOUND, str(e)) from e
-        except desk.WindowClosedError as e:
+        except operator.WindowClosedError as e:
             raise HTTPException(status.HTTP_409_CONFLICT, str(e)) from e
 
     return router

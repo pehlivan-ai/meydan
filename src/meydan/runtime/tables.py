@@ -74,8 +74,8 @@ class RuntimeTables:
     templates: Table
     endpoints: Table
     expectations: Table
-    desk_reads: Table
-    desk_holds: Table
+    operator_reads: Table
+    operator_holds: Table
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -503,11 +503,11 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         postgresql_where=expectations.c.state == "pending",
     )
 
-    # The desk (meydan.desk): people on the team working the conversations.
+    # The desk (meydan.operator): people on the team working the conversations.
     # How far each reader has read a conversation; unread is what came in after `seen_until`. A
     # reader is a principal as text: a person's actor id, or whom a service read for.
-    desk_reads = Table(
-        f"{prefix}desk_reads",
+    operator_reads = Table(
+        f"{prefix}operator_reads",
         metadata,
         Column("conversation_id", UUID(as_uuid=True), ref("conversations"), primary_key=True),
         Column("reader", String(200), primary_key=True),
@@ -515,11 +515,11 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
     )
     # A conversation someone on the team has taken over: while it holds, the agent does not
     # answer (the messages are still received and recorded). `until` None: until handed back.
-    desk_holds = Table(
-        f"{prefix}desk_holds",
+    operator_holds = Table(
+        f"{prefix}operator_holds",
         metadata,
         Column("conversation_id", UUID(as_uuid=True), ref("conversations"), primary_key=True),
-        Column("held_by", String(200), nullable=False),
+        Column("taken_by", String(200), nullable=False),
         Column("until", DateTime(timezone=True)),
         now_col("at"),
     )
@@ -543,6 +543,6 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         templates=templates,
         endpoints=endpoints,
         expectations=expectations,
-        desk_reads=desk_reads,
-        desk_holds=desk_holds,
+        operator_reads=operator_reads,
+        operator_holds=operator_holds,
     )

@@ -22,8 +22,8 @@ from meydan.runtime.types import Turn, _clock, _Part
 log = logging.getLogger("meydan.runtime")
 
 
-def _held(conn: Connection, t: RuntimeTables, conversation_id: uuid.UUID) -> bool:
-    h = t.desk_holds
+def _taken_over(conn: Connection, t: RuntimeTables, conversation_id: uuid.UUID) -> bool:
+    h = t.operator_holds
     return bool(
         conn.scalar(
             select(func.count()).where(
@@ -156,8 +156,8 @@ class Worker(_Part):
                 trans.rollback()
                 return 0
             ids = [r["id"] for r in rows]
-            if await asyncio.to_thread(_held, conn, self.t, key):
-                # Someone on the team holds it (meydan.desk): received and recorded, no answer.
+            if await asyncio.to_thread(_taken_over, conn, self.t, key):
+                # A person has taken it over (meydan.operator): received and recorded, no answer.
                 await asyncio.to_thread(self._mark_processed, conn, ids)
                 trans.commit()
                 return 0

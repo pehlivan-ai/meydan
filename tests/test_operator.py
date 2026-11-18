@@ -1,5 +1,5 @@
-"""The desk: read marks per reader, holding a conversation (the agent stays quiet), writing as
-yourself, and its HTTP surface."""
+"""The operator: read marks per reader, taking a conversation over (the agent stays quiet),
+writing as yourself, and its HTTP surface."""
 
 import uuid
 from datetime import timedelta
@@ -10,11 +10,11 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select, update
 
-from meydan import desk
+from meydan import operator
 from meydan.auth import AuthConfig, issue_service_key
 from meydan.auth.web import Auth
 from meydan.channels.base import Outbound
-from meydan.desk.web import routes as desk_routes
+from meydan.operator.web import routes as operator_routes
 
 ANNA = "+15550003001"  # fake numbers: this is a public repository
 
@@ -46,28 +46,30 @@ def outs(rt, conv):
 async def test_each_reader_has_their_own_unread(world):
     rt, _, conv = world
     with rt.engine.begin() as c:
-        assert desk.unread(c, rt.t, "ada", [conv]) == {conv: 1}
-        desk.mark_read(c, rt.t, conv, "ada")
-        assert desk.unread(c, rt.t, "ada", [conv]) == {}
-        assert desk.unread(c, rt.t, "bora", [conv]) == {conv: 1}  # someone else's mark is theirs
+        assert operator.unread(c, rt.t, "ada", [conv]) == {conv: 1}
+        operator.mark_read(c, rt.t, conv, "ada")
+        assert operator.unread(c, rt.t, "ada", [conv]) == {}
+        assert operator.unread(c, rt.t, "bora", [conv]) == {
+            conv: 1
+        }  # someone else's mark is theirs
     receive(rt, [msg("a2", "still there?", T0, sender=ANNA)])
     with rt.engine.connect() as c:
-        assert desk.unread(c, rt.t, "ada", [conv]) == {conv: 1}
+        assert operator.unread(c, rt.t, "ada", [conv]) == {conv: 1}
 
 
 async def test_a_held_conversation_gets_no_answer_until_handed_back(world):
     rt, _, conv = world
     with rt.engine.begin() as c:
-        desk.hold(c, rt.t, conv, "ada")
+        operator.takeover(c, rt.t, conv, "ada")
     receive(rt, [msg("a2", "anyone?", T0, sender=ANNA)])
     await rt.work_once()
     assert [a for a, _ in outs(rt, conv)] == ["agent"]  # only the first answer, none since
     i = rt.t.inbox
     with rt.engine.connect() as c:
-        held = c.execute(select(i.c.processed_at, i.c.error).where(i.c.message_id == "a2")).one()
-    assert held.processed_at is not None and held.error is None  # recorded, not an error
+        quiet = c.execute(select(i.c.processed_at, i.c.error).where(i.c.message_id == "a2")).one()
+    assert quiet.processed_at is not None and quiet.error is None  # recorded, not an error
     with rt.engine.begin() as c:
-        assert desk.release(c, rt.t, conv)
+        assert operator.handback(c, rt.t, conv)
     receive(rt, [msg("a3", "hello again", T0, sender=ANNA)])
     await rt.work_once()
     assert outs(rt, conv)[-1] == ("agent", "re: hello again")
@@ -76,20 +78,20 @@ async def test_a_held_conversation_gets_no_answer_until_handed_back(world):
 async def test_a_hold_with_an_end_ends(world):
     rt, _, conv = world
     with rt.engine.begin() as c:
-        desk.hold(c, rt.t, conv, "ada", timedelta(minutes=5))
-        assert desk.is_held(c, rt.t, conv)
-        h = rt.t.desk_holds
+        operator.takeover(c, rt.t, conv, "ada", timedelta(minutes=5))
+        assert operator.is_taken_over(c, rt.t, conv)
+        h = rt.t.operator_holds
         c.execute(update(h).values(until=h.c.at - timedelta(seconds=1)))  # five minutes later
-        assert not desk.is_held(c, rt.t, conv)
+        assert not operator.is_taken_over(c, rt.t, conv)
 
 
 async def test_staff_write_as_themselves_and_take_it_over(world):
     rt, channel, conv = world
     with rt.engine.begin() as c:
-        ada = desk.staff_actor(c, rt.t, "crm:user/7", "Ada")
-        assert desk.staff_actor(c, rt.t, "crm:user/7") == ada  # the same person each time
-        desk.send(c, rt, conv, "This is Ada from the team.", ada)
-        assert desk.is_held(c, rt.t, conv)  # writing takes it over
+        ada = operator.staff_actor(c, rt.t, "crm:user/7", "Ada")
+        assert operator.staff_actor(c, rt.t, "crm:user/7") == ada  # the same person each time
+        operator.send(c, rt, conv, "This is Ada from the team.", ada)
+        assert operator.is_taken_over(c, rt.t, conv)  # writing takes it over
     await rt.send_once()
     assert outs(rt, conv)[-1] == ("staff", "This is Ada from the team.")
     o = rt.t.outbox
@@ -104,43 +106,46 @@ async def test_a_closed_window_refuses_free_text(world):
     i = rt.t.inbox
     with rt.engine.begin() as c:
         c.execute(update(i).values(received_at=i.c.received_at - timedelta(hours=25)))
-        ada = desk.staff_actor(c, rt.t, "crm:user/7", "Ada")
-        with pytest.raises(desk.WindowClosedError):
-            desk.send(c, rt, conv, "late", ada)
-        with pytest.raises(desk.NotFoundError):
-            desk.send(c, rt, uuid.uuid4(), "nobody", ada)
+        ada = operator.staff_actor(c, rt.t, "crm:user/7", "Ada")
+        with pytest.raises(operator.WindowClosedError):
+            operator.send(c, rt, conv, "late", ada)
+        with pytest.raises(operator.NotFoundError):
+            operator.send(c, rt, uuid.uuid4(), "nobody", ada)
 
 
-async def test_http_desk_with_a_service_key(world):
+async def test_http_operator_with_a_service_key(world):
     rt, _, conv = world
     auth = Auth(rt.engine, rt.t, AuthConfig(audience="ops"), secure_cookies=False)
     app = FastAPI()
     labels = lambda ids: {a: {"role": "parent"} for a in ids}  # noqa: E731 - the app's words
-    app.include_router(desk_routes(auth, rt, labels=labels), prefix="/desk")
+    app.include_router(operator_routes(auth, rt, labels=labels), prefix="/operator")
     client = TestClient(app)
     with rt.engine.begin() as c:
         _, reader = issue_service_key(c, rt.t, "dash", {"ops", "conversations:read:all"},
                                       audience="ops")  # fmt: skip
         _, writer = issue_service_key(c, rt.t, "dash-w", {"ops", "conversations:read:all",
-                                      "desk:write"}, audience="ops")  # fmt: skip
+                                      "operator:write"}, audience="ops")  # fmt: skip
     as_ada = lambda key: {"Authorization": f"Bearer {key}", "X-On-Behalf-Of": "crm:user/7"}  # noqa: E731
 
-    [row] = client.get("/desk/conversations", headers=as_ada(reader)).json()
-    assert (row["unread"], row["held"], row["labels"]) == (1, False, {"role": "parent"})
+    [row] = client.get("/operator/conversations", headers=as_ada(reader)).json()
+    assert (row["unread"], row["taken_over"], row["labels"]) == (1, False, {"role": "parent"})
     assert (
-        client.post(f"/desk/conversations/{conv}/read", headers=as_ada(reader)).status_code == 204
-    )
-    assert client.get("/desk/conversations", headers=as_ada(reader)).json()[0]["unread"] == 0
-
-    msg_ = {"text": "Hello from the team", "name": "Ada"}
-    path = f"/desk/conversations/{conv}/messages"
-    assert client.post(path, json=msg_, headers=as_ada(reader)).status_code == 403  # no desk:write
-    sent = client.post(path, json=msg_, headers=as_ada(writer))
-    assert sent.status_code == 200 and sent.json()["held_until"] is not None
-    row = client.get("/desk/conversations", headers=as_ada(writer)).json()[0]
-    assert row["held"] and row["held_by"] == "crm:user/7"
-    assert (
-        client.post(f"/desk/conversations/{conv}/release", headers=as_ada(writer)).status_code
+        client.post(f"/operator/conversations/{conv}/read", headers=as_ada(reader)).status_code
         == 204
     )
-    assert not client.get("/desk/conversations", headers=as_ada(writer)).json()[0]["held"]
+    assert client.get("/operator/conversations", headers=as_ada(reader)).json()[0]["unread"] == 0
+
+    msg_ = {"text": "Hello from the team", "name": "Ada"}
+    path = f"/operator/conversations/{conv}/messages"
+    assert (
+        client.post(path, json=msg_, headers=as_ada(reader)).status_code == 403
+    )  # no operator:write
+    sent = client.post(path, json=msg_, headers=as_ada(writer))
+    assert sent.status_code == 200 and sent.json()["taken_until"] is not None
+    row = client.get("/operator/conversations", headers=as_ada(writer)).json()[0]
+    assert row["taken_over"] and row["taken_by"] == "crm:user/7"
+    assert (
+        client.post(f"/operator/conversations/{conv}/handback", headers=as_ada(writer)).status_code
+        == 204
+    )
+    assert not client.get("/operator/conversations", headers=as_ada(writer)).json()[0]["taken_over"]
