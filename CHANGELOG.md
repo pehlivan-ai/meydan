@@ -6,6 +6,35 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.26.0] - 2026-11-18
+### Added
+- `meydan.operator` (and `meydan.operator.web`, extra `api`): a person on the team stepping into a
+  conversation the agent is having. **takeover** (a person takes it over: the agent does not
+  answer while it holds; its messages are still received and recorded), **handback** (they give it
+  back), writing as yourself (`author="staff"`, through the same queue; WhatsApp's 24-hour window
+  enforced), and read marks per reader. Routes under `/operator`; writes need `operator:write`;
+  an app's own words about its people come in through `labels`. **handoff** (the agent hands a
+  conversation to a person) is named, not built yet. See docs/operator.md.
+- `meydan.auth.issue_service_key` / `revoke_service_key`: another application (a dashboard, a back
+  end) calls the API as its own actor with exactly the scopes given; the key is shown once, kept
+  as a hash. A service may say whom it acts for (`X-On-Behalf-Of`, an identifier in the calling
+  app): `Principal.on_behalf_of`, recorded in the audit trail, never authority.
+- The outbox records who wrote each message when it is queued (`author`: agent, staff, system;
+  `author_actor_id` for staff). A turn id is no proof the agent wrote it.
+- Observe: a thread line has an id, its author, and for ours its delivery (receipts win over the
+  send status). The conversation list carries the last message either way, its direction, author
+  and text, redacted and audited as the thread is.
+- Templates keep what they say: the channel's list brings the body and the buttons' labels
+  (WhatsApp: `components`). A sent template shows its body filled with that message's parameters;
+  an authentication template (a one-time code) never shows any words.
+### Upgrading
+- Tables change: run your migrations (e.g. `alembic revision --autogenerate`). New: `outbox.author`
+  (default `'system'`) and `outbox.author_actor_id`, `audit.on_behalf_of`, `templates.body` and
+  `templates.buttons`, and two tables `operator_reads`, `operator_holds`. Past agent replies can be
+  marked as the agent's: `UPDATE <prefix>outbox SET author = 'agent' WHERE turn_id IN (SELECT id
+  FROM <prefix>turns)`.
+- Template bodies fill in at the next template sync (startup).
+
 ## [0.25.0] - 2026-11-17
 ### Added
 - `meydan.llm`: `vertex-openai:<publisher>/<model>[@location]`, a partner or open model on Vertex
