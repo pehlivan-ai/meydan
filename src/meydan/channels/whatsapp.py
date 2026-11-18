@@ -383,7 +383,7 @@ class WhatsAppCloud:
         Needs the whatsapp_business_management permission."""
         url = f"{GRAPH}/{self._version}/{account}/message_templates"
         params: dict[str, Any] | None = {
-            "fields": "id,name,language,status,category,quality_score",
+            "fields": "id,name,language,status,category,quality_score,components",
             "limit": 100,
         }
         now, out = datetime.now(UTC), []
@@ -406,6 +406,7 @@ class WhatsAppCloud:
                         status=tpl.get("status"),
                         category=tpl.get("category"),
                         quality=quality.get("score") if isinstance(quality, dict) else quality,
+                        **_words(tpl.get("components") or []),
                     )
                 )
             url, params = data.get("paging", {}).get("next"), None  # `next` carries the query
@@ -566,3 +567,15 @@ class WhatsAppCloud:
 
     async def aclose(self) -> None:
         await self._client.aclose()
+
+
+def _words(components: list[dict[str, Any]]) -> dict[str, Any]:
+    """A template's body text and button labels, from the Graph API's components."""
+    body = next((c.get("text") for c in components if c.get("type") == "BODY"), None)
+    buttons = tuple(
+        b.get("text", "")
+        for c in components
+        if c.get("type") == "BUTTONS"
+        for b in c.get("buttons", [])
+    )
+    return {"body": body, "buttons": buttons}

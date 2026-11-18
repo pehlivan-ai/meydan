@@ -71,6 +71,11 @@ class Principal:
     session_id: uuid.UUID
     audience: str
     scopes: frozenset[str]
+    # A service key (`issue_service_key`): another application calling as itself.
+    service: bool = False
+    # Who a service says it acts for (a header, recorded in the audit trail). Never authority:
+    # what the request may see is the service's scopes, whatever this says.
+    on_behalf_of: str | None = None
 
     def has(self, *scopes: str) -> bool:
         return set(scopes) <= self.scopes
@@ -416,7 +421,7 @@ def principal(conn: Connection, t: RuntimeTables, token: str, audience: str) -> 
     """The principal behind a session token, or None (unknown, expired, revoked, other audience)."""
     ss = t.sessions
     row = conn.execute(
-        select(ss.c.id, ss.c.actor_id).where(
+        select(ss.c.id, ss.c.actor_id, ss.c.label).where(
             ss.c.token_hash == hash_secret(token),
             ss.c.audience == audience,
             ss.c.revoked_at.is_(None),
@@ -426,7 +431,8 @@ def principal(conn: Connection, t: RuntimeTables, token: str, audience: str) -> 
     if row is None:
         return None
     conn.execute(update(ss).where(ss.c.id == row.id).values(last_seen_at=_now()))
-    return Principal(row.actor_id, row.id, audience, scopes_of(conn, t, row.actor_id))
+    service = bool(row.label and row.label.startswith(SERVICE_LABEL))
+    return Principal(row.actor_id, row.id, audience, scopes_of(conn, t, row.actor_id), service)
 
 
 def sign_out(conn: Connection, t: RuntimeTables, token: str) -> None:
@@ -436,3 +442,58 @@ def sign_out(conn: Connection, t: RuntimeTables, token: str) -> None:
         .where(ss.c.token_hash == hash_secret(token), ss.c.revoked_at.is_(None))
         .values(revoked_at=_now())
     )
+
+
+# --- service keys -------------------------------------------------------------------------
+
+SERVICE_LABEL = "service:"
+
+
+def issue_service_key(
+    conn: Connection,
+    t: RuntimeTables,
+    name: str,
+    scopes: set[str] | frozenset[str],
+    *,
+    audience: str,
+    ttl: timedelta = timedelta(days=365),
+) -> tuple[uuid.UUID, str]:
+    """A key for another application (a dashboard, a back end) to call this app's API as itself.
+
+    There is no person to send a code: the application is its own actor (kind "agent", named
+    `name`), holding exactly `scopes`, through one long session. The key is returned once and
+    stored only as a hash; it is sent as `Authorization: Bearer <key>`. Such a principal may say
+    whom it acts for (`X-On-Behalf-Of`, `Principal.on_behalf_of`): an identifier in the calling
+    app (e.g. "crm:user/42"; headers are ASCII, and an id outlives a name), recorded in the audit
+    trail, never authority.
+    Revoke with `revoke_service_key`. Returns (actor id, key)."""
+    actor = conn.scalar(
+        insert(t.actors).values(kind="agent", name=name[:255]).returning(t.actors.c.id)
+    )
+    for scope in sorted(scopes):
+        grant(conn, t, actor, scope)
+    key = secrets.token_urlsafe(32)
+    conn.execute(
+        insert(t.sessions).values(
+            token_hash=hash_secret(key),
+            actor_id=actor,
+            audience=audience,
+            expires_at=_now() + ttl,
+            label=(SERVICE_LABEL + name)[:200],
+        )
+    )
+    return actor, key
+
+
+def revoke_service_key(conn: Connection, t: RuntimeTables, actor_id: uuid.UUID) -> int:
+    """Revoke every service session of this actor; how many were live."""
+    ss = t.sessions
+    return conn.execute(
+        update(ss)
+        .where(
+            ss.c.actor_id == actor_id,
+            ss.c.revoked_at.is_(None),
+            ss.c.label.like(SERVICE_LABEL + "%"),
+        )
+        .values(revoked_at=_now())
+    ).rowcount

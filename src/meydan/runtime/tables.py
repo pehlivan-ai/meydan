@@ -74,6 +74,8 @@ class RuntimeTables:
     templates: Table
     endpoints: Table
     expectations: Table
+    operator_reads: Table
+    operator_holds: Table
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -243,6 +245,11 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         Column("seq", Integer, nullable=False, server_default="0"),
         Column("message", JSONB, nullable=False),  # Outbound.to_payload()
         Column("ref", String(255)),  # Outbound.ref: the app's key for what it's about
+        # Who wrote it, recorded when it is queued, never guessed later (a turn id is no proof:
+        # reminders and codes get one too): agent (a turn's reply) | staff (a person on the team,
+        # `author_actor_id`) | system (codes, reminders, notices the app sends on its own).
+        Column("author", String(10), nullable=False, server_default="system"),
+        Column("author_actor_id", UUID(as_uuid=True), ref("actors")),
         Column("status", String(20), nullable=False, server_default="pending"),
         Column("channel_message_id", String(255), unique=True),  # e.g. wamid once sent
         Column("attempts", Integer, nullable=False, server_default="0"),
@@ -376,6 +383,8 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         Column("actor_id", UUID(as_uuid=True), ref("actors"), nullable=False),
         Column("action", String(60), nullable=False),  # e.g. "read:messages"
         Column("subject_id", UUID(as_uuid=True)),  # e.g. the conversation
+        # A service key reading for someone (X-On-Behalf-Of): who, as the service said it.
+        Column("on_behalf_of", String(200)),
     )
     Index(f"ix_{prefix}audit_actor", audit.c.actor_id, audit.c.at)
 
@@ -425,6 +434,9 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         Column("upcoming_category", String(30)),
         Column("quality", String(20)),
         Column("reason", Text),
+        # What it says (from the channel's list): the body with placeholders, the buttons' labels.
+        Column("body", Text),
+        Column("buttons", JSONB),
         Column("status_at", DateTime(timezone=True)),  # channel time of the status we keep
         now_col("updated_at"),
         UniqueConstraint("channel", "name", "language"),
@@ -491,6 +503,27 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         postgresql_where=expectations.c.state == "pending",
     )
 
+    # The desk (meydan.operator): people on the team working the conversations.
+    # How far each reader has read a conversation; unread is what came in after `seen_until`. A
+    # reader is a principal as text: a person's actor id, or whom a service read for.
+    operator_reads = Table(
+        f"{prefix}operator_reads",
+        metadata,
+        Column("conversation_id", UUID(as_uuid=True), ref("conversations"), primary_key=True),
+        Column("reader", String(200), primary_key=True),
+        Column("seen_until", DateTime(timezone=True), nullable=False),
+    )
+    # A conversation someone on the team has taken over: while it holds, the agent does not
+    # answer (the messages are still received and recorded). `until` None: until handed back.
+    operator_holds = Table(
+        f"{prefix}operator_holds",
+        metadata,
+        Column("conversation_id", UUID(as_uuid=True), ref("conversations"), primary_key=True),
+        Column("taken_by", String(200), nullable=False),
+        Column("until", DateTime(timezone=True)),
+        now_col("at"),
+    )
+
     return RuntimeTables(
         actors=actors,
         identities=identities,
@@ -510,4 +543,6 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         templates=templates,
         endpoints=endpoints,
         expectations=expectations,
+        operator_reads=operator_reads,
+        operator_holds=operator_holds,
     )

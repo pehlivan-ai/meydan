@@ -26,6 +26,9 @@ def backoff(attempt: int, min_wait_s: float = 0) -> float:
     return max(jittered, floor, 0.5)
 
 
+AUTHORS = ("agent", "staff", "system")
+
+
 class Outbox(_Part):
     def enqueue(
         self,
@@ -39,12 +42,20 @@ class Outbox(_Part):
         recipient_identity_id: uuid.UUID | None = None,
         start_at: datetime | None = None,
         turn_id: uuid.UUID | None = None,
+        author: str = "system",
+        author_actor_id: uuid.UUID | None = None,
     ) -> uuid.UUID | None:
         """Queue one outbound turn (one or more messages), paced like someone typing them.
 
-        Returns the turn id. Without `start_at` the turn starts now on the database clock."""
+        `author`: who wrote them, kept on each row (agent | staff | system); staff names the
+        person (`author_actor_id`). Returns the turn id. Without `start_at` the turn starts now on
+        the database clock."""
         if not messages:
             return None
+        if author not in AUTHORS:
+            raise ValueError(f"author must be one of {AUTHORS}")
+        if (author == "staff") != (author_actor_id is not None):
+            raise ValueError("a staff message names its author, and only a staff message does")
         turn_id = turn_id or uuid.uuid4()
         offset = timedelta()
         rows = []
@@ -63,6 +74,8 @@ class Outbox(_Part):
                     "seq": seq,
                     "message": m.to_payload(),
                     "ref": m.ref,
+                    "author": author,
+                    "author_actor_id": author_actor_id,
                     "created_at": _clock(),
                     "next_attempt_at": (start_at + offset) if start_at else _clock() + offset,
                 }
