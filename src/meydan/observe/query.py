@@ -191,6 +191,7 @@ def conversations(
     limit: int = 50,
     *,
     visibility: Visibility = NEED_TO_KNOW,
+    only: uuid.UUID | None = None,
 ) -> list[ConversationRow]:
     cv, i, tu = t.conversations, t.inbox, t.turns
     peer = _peer(t)
@@ -214,6 +215,8 @@ def conversations(
     )
     if not visibility.sees(who, "all_conversations"):
         q = q.where(cv.c.id.in_(_own_conversations(t, who.actor_id)))
+    if only is not None:
+        q = q.where(cv.c.id == only)
     costs = visibility.sees(who, "costs")
     rows = [
         ConversationRow(
@@ -257,7 +260,7 @@ def _said(message: dict, words: dict) -> dict:
         return {"text": message.get("text")}
     category, body, buttons = words.get((name, message.get("language")), (None, None, []))
     if category == "AUTHENTICATION" or message.get("otp") is not None:
-        return {"text": None, "template": name, "buttons": []}  # a code: never its words
+        return {"text": None, "template": name, "buttons": [], "code": True}  # never its words
     text = body
     if text is not None:
         for key, value in (message.get("params") or {}).items():
@@ -344,6 +347,8 @@ class Line(BaseModel):
     # its buttons. An authentication template (a one-time code) shows no words at all.
     template: str | None = None
     buttons: list[str] = []
+    # A one-time code (an authentication template): never shown, only that it was sent.
+    code: bool = False
 
 
 class TurnView(BaseModel):

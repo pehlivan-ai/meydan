@@ -8,7 +8,7 @@ import pytest
 from conftest import T0, FakeChannel, msg, receive, runtime
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import select, update
+from sqlalchemy import func, select, update
 
 from meydan import operator
 from meydan.auth import AuthConfig, issue_service_key
@@ -57,22 +57,71 @@ async def test_each_reader_has_their_own_unread(world):
         assert operator.unread(c, rt.t, "ada", [conv]) == {conv: 1}
 
 
-async def test_a_held_conversation_gets_no_answer_until_handed_back(world):
+async def test_a_taken_over_conversation_waits_and_the_agent_answers_after_handback(world):
     rt, _, conv = world
     with rt.engine.begin() as c:
         operator.takeover(c, rt.t, conv, "ada")
     receive(rt, [msg("a2", "anyone?", T0, sender=ANNA)])
     await rt.work_once()
-    assert [a for a, _ in outs(rt, conv)] == ["agent"]  # only the first answer, none since
+    assert [a for a, _ in outs(rt, conv)] == ["agent"]  # nothing while it is taken over
     i = rt.t.inbox
     with rt.engine.connect() as c:
-        quiet = c.execute(select(i.c.processed_at, i.c.error).where(i.c.message_id == "a2")).one()
-    assert quiet.processed_at is not None and quiet.error is None  # recorded, not an error
+        waiting = c.scalar(select(i.c.processed_at).where(i.c.message_id == "a2"))
+    assert waiting is None  # it waits, it is not dropped
+    assert rt.health().ok  # waiting on purpose is not stuck work
     with rt.engine.begin() as c:
         assert operator.handback(c, rt.t, conv)
-    receive(rt, [msg("a3", "hello again", T0, sender=ANNA)])
     await rt.work_once()
-    assert outs(rt, conv)[-1] == ("agent", "re: hello again")
+    assert outs(rt, conv)[-1] == ("agent", "re: anyone?")  # answered once handed back
+
+
+async def test_a_takeover_while_the_agent_thinks_stops_its_reply(db):
+    """Karşıt tur H1: the check before the turn is not enough; the reply's own commit checks."""
+    holder = {}
+
+    async def slow(turn):
+        with holder["rt"].engine.begin() as c:
+            operator.takeover(c, holder["rt"].t, turn.conversation_id, "ada")  # meanwhile
+        return [Outbound.text_message("too late")]
+
+    rt = runtime(db, slow, FakeChannel())
+    holder["rt"] = rt
+    receive(rt, [msg("b1", "hi", T0, sender=ANNA)])
+    await rt.work_once()
+    o = rt.t.outbox
+    with rt.engine.connect() as c:
+        assert c.scalar(select(func.count()).select_from(o)) == 0  # never queued
+
+
+async def test_a_takeover_cancels_the_agents_unsent_replies(world):
+    rt, _, conv = world
+    o = rt.t.outbox
+    with rt.engine.begin() as c:
+        c.execute(update(o).where(o.c.conversation_id == conv).values(status="pending"))
+        operator.takeover(c, rt.t, conv, "ada")
+        assert c.scalar(select(o.c.status).where(o.c.conversation_id == conv)) == "cancelled"
+
+
+async def test_someone_elses_takeover_is_not_overwritten_unless_asked(world):
+    rt, _, conv = world
+    with rt.engine.begin() as c:
+        operator.takeover(c, rt.t, conv, "ada")
+        with pytest.raises(operator.AlreadyTakenError):
+            operator.takeover(c, rt.t, conv, "bora")
+        assert operator.takeover(c, rt.t, conv, "bora", replace=True).taken_by == "bora"
+
+
+async def test_writing_never_shortens_a_takeover_and_what_staff_answered_stays_answered(world):
+    rt, _, conv = world
+    receive(rt, [msg("a2", "a question", T0, sender=ANNA)])
+    with rt.engine.begin() as c:
+        operator.takeover(c, rt.t, conv, "ada")  # until handed back
+        ada = operator.staff_actor(c, rt.t, "crm:user/7", "Ada")
+        operator.send(c, rt, conv, "Answered by Ada.", ada, taken_by="ada")
+        assert operator.takeover_of(c, rt.t, conv).until is None  # not cut to 30 minutes
+        operator.handback(c, rt.t, conv)
+    await rt.work_once()
+    assert [a for a, _ in outs(rt, conv)] == ["agent", "staff"]  # the agent doesn't answer again
 
 
 async def test_a_hold_with_an_end_ends(world):
@@ -149,3 +198,45 @@ async def test_http_operator_with_a_service_key(world):
         == 204
     )
     assert not client.get("/operator/conversations", headers=as_ada(writer)).json()[0]["taken_over"]
+
+
+async def test_http_one_conversation_summary_conflict_and_audit(world):
+    rt, _, conv = world
+    auth = Auth(rt.engine, rt.t, AuthConfig(audience="ops"), secure_cookies=False)
+    app = FastAPI()
+    app.include_router(operator_routes(auth, rt), prefix="/operator")
+    client = TestClient(app)
+    scopes = {"ops", "conversations:read:all", "operator:write"}
+    with rt.engine.begin() as c:
+        _, key = issue_service_key(c, rt.t, "dash", scopes, audience="ops")
+    as_ = lambda who: {"Authorization": f"Bearer {key}", "X-On-Behalf-Of": who}  # noqa: E731
+
+    one = client.get(f"/operator/conversations/{conv}", headers=as_("crm:user/7"))
+    assert one.status_code == 200 and one.json()["id"] == str(conv)
+    missing = uuid.uuid4()
+    assert (
+        client.get(f"/operator/conversations/{missing}", headers=as_("crm:user/7")).status_code
+        == 404
+    )
+    assert (
+        client.post(
+            f"/operator/conversations/{missing}/read", headers=as_("crm:user/7")
+        ).status_code
+        == 404
+    )
+
+    take = f"/operator/conversations/{conv}/takeover"
+    assert client.post(take, json={}, headers=as_("crm:user/7")).status_code == 200
+    assert (
+        client.post(take, json={}, headers=as_("crm:user/8")).status_code == 409
+    )  # someone else has it
+    assert client.post(take, json={"replace": True}, headers=as_("crm:user/8")).status_code == 200
+    assert client.get("/operator/summary", headers=as_("crm:user/8")).json() == {"taken_over": 1}
+
+    a = rt.t.audit
+    with rt.engine.connect() as c:
+        acts = c.execute(select(a.c.action, a.c.on_behalf_of).where(a.c.subject_id == conv)
+                         .order_by(a.c.at)).all()  # fmt: skip
+    assert [tuple(r) for r in acts if r.action.startswith("operator:")] == [
+        ("operator:takeover", "crm:user/7"), ("operator:takeover", "crm:user/8")
+    ]  # fmt: skip

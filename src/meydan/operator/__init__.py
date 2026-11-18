@@ -98,17 +98,45 @@ def unread(
 # --- holding -------------------------------------------------------------------------------
 
 
+class AlreadyTakenError(Exception):
+    """Someone else has this conversation; taking it over needs `replace`."""
+
+    def __init__(self, hold: "Takeover"):
+        super().__init__(f"taken over by {hold.taken_by}")
+        self.hold = hold
+
+
 def takeover(
     conn: Connection,
     t: RuntimeTables,
     conversation_id: uuid.UUID,
     taken_by: str,
     for_: timedelta | None = None,
+    *,
+    replace: bool = False,
+    extend_only: bool = False,
 ) -> Takeover:
-    """Take a conversation over: the agent stops answering it, for `for_` or until `handback`."""
-    h = t.operator_holds
+    """Take a conversation over: the agent stops answering it, for `for_` or until `handback`.
+
+    Someone else's takeover is not overwritten unless `replace` (AlreadyTakenError). With
+    `extend_only` (what writing does) an existing takeover is never shortened: one until handed
+    back stays so. The agent's replies queued and not yet sent are cancelled: once a person has
+    it, nothing the agent drafted before goes out."""
+    h, o = t.operator_holds, t.outbox
+    conn.execute(
+        select(func.pg_advisory_xact_lock(func.hashtextextended(f"operator:{conversation_id}", 0)))
+    )
     now = conn.scalar(select(func.now()))
     until = now + for_ if for_ is not None else None
+    held = takeover_of(conn, t, conversation_id)
+    if held is not None and held.taken_by != taken_by[:200] and not replace:
+        raise AlreadyTakenError(held)
+    if (
+        extend_only
+        and held is not None
+        and (held.until is None or (until is not None and held.until >= until))
+    ):
+        until = held.until  # writing never shortens a takeover
     values = {
         "conversation_id": conversation_id,
         "taken_by": taken_by[:200],
@@ -121,6 +149,13 @@ def takeover(
             index_elements=[h.c.conversation_id],
             set_={"taken_by": stmt.excluded.taken_by, "until": stmt.excluded.until, "at": now},
         )
+    )
+    conn.execute(
+        update(o)
+        .where(
+            o.c.conversation_id == conversation_id, o.c.status == "pending", o.c.author == "agent"
+        )
+        .values(status="cancelled", last_error="taken over by a person", updated_at=now)
     )
     return Takeover(taken_by[:200], until, now)
 
@@ -215,6 +250,21 @@ def send(
         author="staff",
         author_actor_id=by,
     )
+    # What they wrote before this is answered, by a person: the agent won't answer it later.
+    i2 = t.inbox
+    conn.execute(
+        update(i2)
+        .where(i2.c.conversation_id == conversation_id, i2.c.processed_at.is_(None))
+        .values(processed_at=func.now())
+    )
     if take_over_for is not None:
-        takeover(conn, t, conversation_id, taken_by or str(by), take_over_for)
+        takeover(
+            conn,
+            t,
+            conversation_id,
+            taken_by or str(by),
+            take_over_for,
+            replace=True,
+            extend_only=True,
+        )
     return turn

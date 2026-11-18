@@ -43,7 +43,8 @@ from sqlalchemy.dialects.postgresql import JSONB, UUID
 from meydan.ids import uuid7
 
 # held: a template message waiting for its template to become sendable again (out of the line).
-OUTBOX_STATUSES = ("pending", "held", "sent", "delivered", "read", "failed", "dead")
+# cancelled: an agent reply not yet sent when a person took the conversation over (meydan.operator).
+OUTBOX_STATUSES = ("pending", "held", "sent", "delivered", "read", "failed", "dead", "cancelled")
 ACTOR_KINDS = ("person", "agent", "org")
 CLAIM_STATES = ("proposed", "active")
 EXPECTATION_STATES = ("pending", "answered", "expired", "cancelled", "undeliverable")

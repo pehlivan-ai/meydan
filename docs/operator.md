@@ -14,6 +14,8 @@ app.include_router(operator_routes(auth, runtime, labels=my_labels), prefix="/op
 | | what it does |
 |---|---|
 | `GET /operator/conversations` | observe's list, plus this reader's `unread`, any `taken_over`/`taken_by`/`taken_until`, and the app's `labels` |
+| `GET /operator/conversations/{id}` | one conversation's row (who, unread, takeover) |
+| `GET /operator/summary` | counts only (`taken_over`), nothing read or audited |
 | `POST /operator/conversations/{id}/read` | this reader has seen everything so far |
 | `POST /operator/conversations/{id}/takeover {minutes?}` | take it over: the agent does not answer until it ends or is handed back |
 | `POST /operator/conversations/{id}/handback` | hand it back to the agent |
@@ -25,7 +27,7 @@ Reads need `ops` and `conversations:read:all`; writes also `operator:write`.
 application, see `auth.issue_service_key`), whom it acts for (`X-On-Behalf-Of`). A dashboard's
 users each keep their own unread counts through one key.
 
-**Takeover.** The worker checks `operator_holds` before calling the agent: a conversation taken over has its
+**Takeover.** While a conversation is taken over the agent does not answer it: the worker skips it, checks again in the reply's own transaction (a takeover that lands while the agent thinks still stops the reply), and the agent's unsent replies are cancelled. Its messages wait: what a person answers is marked answered, and the agent answers what is still unanswered once it is handed back or the takeover ends. Someone else's takeover is not overwritten unless `replace` (409). Writing never shortens a takeover. Takeover and handback are audited. Before: a conversation taken over had its
 messages are received, recorded and marked processed, with no answer. Not an error.
 
 **Writing.** A message from the team goes to whoever wrote last, from the endpoint they wrote

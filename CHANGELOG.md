@@ -6,6 +6,29 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.27.0] - 2026-11-18
+### Fixed
+- `operator`: a takeover now stops the agent's reply even when it lands while the agent is
+  thinking: the reply's own transaction checks again, and the agent's replies queued and not yet
+  sent are cancelled (outbox status `cancelled`).
+- `operator`: messages that arrive while a conversation is taken over are no longer marked
+  processed. They wait; what a person answered (`send`) is marked answered; the agent answers
+  what is still unanswered once the conversation is handed back or the takeover ends. Health
+  does not count them as stuck work.
+- `operator.send` never shortens a takeover (one until handed back stays so).
+### Added
+- `operator.takeover(..., replace=)`: someone else's takeover is not overwritten unless asked
+  (`AlreadyTakenError`; HTTP 409, `{"replace": true}` to take it).
+- Routes: `GET /operator/conversations/{id}` (one row however far down the list) and
+  `GET /operator/summary` (counts only, nothing read, nothing audited). Takeover and handback are
+  audited (`operator:takeover`, `operator:handback`, with `on_behalf_of`); unknown conversations
+  are 404, not a database error.
+- Observe: `Line.code`: a one-time code, marked as such (never inferred from a missing text).
+### Upgrading
+- The outbox status check gains `cancelled`: replace the constraint in a migration
+  (`ALTER TABLE <prefix>outbox DROP CONSTRAINT ...; ADD CONSTRAINT ... CHECK (status IN (...,
+  'cancelled'))`); autogenerate does not see check constraints.
+
 ## [0.26.0] - 2026-11-18
 ### Added
 - `meydan.operator` (and `meydan.operator.web`, extra `api`): a person on the team stepping into a
