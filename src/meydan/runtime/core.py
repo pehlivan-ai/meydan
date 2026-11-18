@@ -46,7 +46,7 @@ from meydan.runtime.types import (
     Turn,
     _clock,
 )
-from meydan.runtime.worker import Worker
+from meydan.runtime.worker import Worker, taken_over_now
 
 __all__ = [
     "Channel", "FailureReply", "Handler", "Intercepted", "Interceptor", "Replied", "Runtime",
@@ -166,6 +166,8 @@ class Runtime:
         ours_in = [i.c.channel == self.serves] if self.serves else []
         ours_out = [o.c.channel == self.serves] if self.serves else []
         due = (i.c.retry_at.is_(None)) | (i.c.retry_at <= now)
+        # A conversation a person has taken over waits on purpose: not stuck work.
+        due = due & ~taken_over_now(self.t, i.c.conversation_id)
         with self.engine.connect() as conn:
             waiting = conn.scalar(
                 select(func.extract("epoch", now - func.min(i.c.received_at))).where(

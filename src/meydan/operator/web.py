@@ -19,6 +19,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
+from sqlalchemy import func, insert, select
 
 from meydan import operator
 from meydan.auth.core import Principal
@@ -43,6 +44,11 @@ class OperatorRow(ConversationRow):
 
 class TakeoverRequest(BaseModel):
     minutes: int | None = Field(default=None, ge=1, le=7 * 24 * 60)  # None: until handed back
+    replace: bool = False  # take it from someone else who has it (else 409)
+
+
+class Summary(BaseModel):
+    taken_over: int
 
 
 class MessageRequest(BaseModel):
@@ -79,18 +85,12 @@ def routes(
         with engine.begin() as conn:
             return fn(conn, *args)
 
-    @router.get("/conversations")
-    async def conversations(person: reads, limit: int = 100) -> list[OperatorRow]:
-        """The conversations, newest first, with this reader's unread count and any takeover."""
+    def rows_of(conn, person: Principal, limit: int, only: uuid.UUID | None = None):
+        rows = query.conversations(conn, t, person, limit, visibility=visibility, only=only)
+        ids = [r.id for r in rows]
+        return rows, operator.unread(conn, t, reader(person), ids), operator.takeovers(conn, t, ids)
 
-        def read(conn):
-            rows = query.conversations(conn, t, person, min(limit, 200), visibility=visibility)
-            ids = [r.id for r in rows]
-            unread = operator.unread(conn, t, reader(person), ids)
-            taken = operator.takeovers(conn, t, ids)
-            return rows, unread, taken
-
-        rows, unread, taken = await run_in_threadpool(tx, read)
+    def shaped(rows, unread, taken) -> list[OperatorRow]:
         said = labels([r.actor_id for r in rows if r.actor_id]) if labels else {}
         out = []
         for r in rows:
@@ -105,27 +105,89 @@ def routes(
                     labels=said.get(r.actor_id, {}) if r.actor_id else {},
                 )
             )
+        return out
+
+    def exists_or_404(conn, conversation_id: uuid.UUID) -> None:
+        cv = t.conversations
+        if conn.scalar(select(cv.c.id).where(cv.c.id == conversation_id)) is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found.")
+
+    def audited(conn, person: Principal, action: str, conversation_id: uuid.UUID) -> None:
+        """Who took over or handed back what: the operator's acts, like reads, leave a trace."""
+        conn.execute(
+            insert(t.audit).values(
+                actor_id=person.actor_id,
+                action=action,
+                subject_id=conversation_id,
+                on_behalf_of=person.on_behalf_of,
+            )
+        )
+
+    @router.get("/conversations")
+    async def conversations(person: reads, limit: int = 100) -> list[OperatorRow]:
+        """The conversations, newest first, with this reader's unread count and any takeover."""
+        found = await run_in_threadpool(tx, lambda c: rows_of(c, person, min(limit, 200)))
+        out = shaped(*found)
         out.sort(key=lambda d: d.last_message_at or d.last_at or datetime.min, reverse=True)
         return out
 
+    @router.get("/conversations/{conversation_id}")
+    async def conversation(person: reads, conversation_id: uuid.UUID) -> OperatorRow:
+        """One conversation's row (who, unread, takeover), however far down the list it is."""
+        found = await run_in_threadpool(tx, lambda c: rows_of(c, person, 1, conversation_id))
+        out = shaped(*found)
+        if not out:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found.")
+        return out[0]
+
+    @router.get("/summary")
+    async def summary(person: reads) -> Summary:
+        """Counts only, nothing read: how many conversations are taken over now."""
+
+        def count(conn):
+            h = t.operator_holds
+            n = conn.scalar(
+                select(func.count()).where((h.c.until.is_(None)) | (h.c.until > func.now()))
+            )
+            return Summary(taken_over=int(n or 0))
+
+        return await run_in_threadpool(tx, count)
+
     @router.post("/conversations/{conversation_id}/read", status_code=204)
     async def read(person: reads, conversation_id: uuid.UUID) -> None:
-        await run_in_threadpool(
-            tx, lambda c: operator.mark_read(c, t, conversation_id, reader(person))
-        )
+        def mark(conn):
+            exists_or_404(conn, conversation_id)
+            operator.mark_read(conn, t, conversation_id, reader(person))
+
+        await run_in_threadpool(tx, mark)
 
     @router.post("/conversations/{conversation_id}/takeover")
     async def takeover(
         person: writes, conversation_id: uuid.UUID, body: TakeoverRequest
     ) -> operator.Takeover:
         span = timedelta(minutes=body.minutes) if body.minutes else None
-        return await run_in_threadpool(
-            tx, lambda c: operator.takeover(c, t, conversation_id, reader(person), span)
-        )
+
+        def take(conn):
+            exists_or_404(conn, conversation_id)
+            got = operator.takeover(
+                conn, t, conversation_id, reader(person), span, replace=body.replace
+            )
+            audited(conn, person, "operator:takeover", conversation_id)
+            return got
+
+        try:
+            return await run_in_threadpool(tx, take)
+        except operator.AlreadyTakenError as e:
+            raise HTTPException(status.HTTP_409_CONFLICT, "taken over by someone else") from e
 
     @router.post("/conversations/{conversation_id}/handback", status_code=204)
     async def handback(person: writes, conversation_id: uuid.UUID) -> None:
-        await run_in_threadpool(tx, lambda c: operator.handback(c, t, conversation_id))
+        def give(conn):
+            exists_or_404(conn, conversation_id)
+            operator.handback(conn, t, conversation_id)
+            audited(conn, person, "operator:handback", conversation_id)
+
+        await run_in_threadpool(tx, give)
 
     @router.post("/conversations/{conversation_id}/messages")
     async def message(person: writes, conversation_id: uuid.UUID, body: MessageRequest) -> Sent:

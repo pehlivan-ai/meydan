@@ -9,7 +9,7 @@ from collections.abc import Sequence
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Connection, func, or_, select, update
+from sqlalchemy import Connection, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import distinct_on
 
 from meydan.channels.base import Address, Inbound, Outbound
@@ -22,16 +22,16 @@ from meydan.runtime.types import Turn, _clock, _Part
 log = logging.getLogger("meydan.runtime")
 
 
-def _taken_over(conn: Connection, t: RuntimeTables, conversation_id: uuid.UUID) -> bool:
+def taken_over_now(t: RuntimeTables, conversation_id):
+    """A SQL condition: this conversation is taken over by a person now (meydan.operator)."""
     h = t.operator_holds
-    return bool(
-        conn.scalar(
-            select(func.count()).where(
-                h.c.conversation_id == conversation_id,
-                (h.c.until.is_(None)) | (h.c.until > func.now()),
-            )
-        )
+    return exists().where(
+        h.c.conversation_id == conversation_id, (h.c.until.is_(None)) | (h.c.until > func.now())
     )
+
+
+def _taken_over(conn: Connection, t: RuntimeTables, conversation_id: uuid.UUID) -> bool:
+    return bool(conn.scalar(select(taken_over_now(t, conversation_id))))
 
 
 class Worker(_Part):
@@ -95,6 +95,9 @@ class Worker(_Part):
                 i.c.processed_at.is_(None),
                 # A turn put off waits; a new message from the person tries it again at once.
                 or_(i.c.retry_at.is_(None), i.c.retry_at <= now),
+                # A conversation a person has taken over waits: its messages stay unprocessed and
+                # the agent answers what is still unanswered once it is handed back (or ends).
+                ~taken_over_now(self.t, i.c.conversation_id),
                 *self._ours(),
             )
             .group_by(i.c.conversation_id)
@@ -157,9 +160,7 @@ class Worker(_Part):
                 return 0
             ids = [r["id"] for r in rows]
             if await asyncio.to_thread(_taken_over, conn, self.t, key):
-                # A person has taken it over (meydan.operator): received and recorded, no answer.
-                await asyncio.to_thread(self._mark_processed, conn, ids)
-                trans.commit()
+                trans.rollback()  # taken over meanwhile: left for after the handback
                 return 0
             turn = _turn_from_rows(key, rows)
             last = rows[-1]["message_id"]
@@ -184,7 +185,12 @@ class Worker(_Part):
                 if refresh is not None:
                     refresh.cancel()
 
-            def commit() -> None:
+            def commit() -> bool:
+                # Taken over while the agent was thinking: its reply does not go out, and the
+                # messages wait for after the handback (checked in the reply's own transaction).
+                if _taken_over(conn, self.t, key):
+                    trans.rollback()
+                    return False
                 self.enqueue(
                     conn,
                     channel=turn.channel,
@@ -208,9 +214,9 @@ class Worker(_Part):
                     messages_out=len(replies),
                 )
                 trans.commit()
+                return True
 
-            await asyncio.to_thread(commit)
-            return 1
+            return 1 if await asyncio.to_thread(commit) else 0
         finally:
             await asyncio.to_thread(conn.close)
 
