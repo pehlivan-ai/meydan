@@ -243,6 +243,11 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         Column("seq", Integer, nullable=False, server_default="0"),
         Column("message", JSONB, nullable=False),  # Outbound.to_payload()
         Column("ref", String(255)),  # Outbound.ref: the app's key for what it's about
+        # Who wrote it, recorded when it is queued, never guessed later (a turn id is no proof:
+        # reminders and codes get one too): agent (a turn's reply) | staff (a person on the team,
+        # `author_actor_id`) | system (codes, reminders, notices the app sends on its own).
+        Column("author", String(10), nullable=False, server_default="system"),
+        Column("author_actor_id", UUID(as_uuid=True), ref("actors")),
         Column("status", String(20), nullable=False, server_default="pending"),
         Column("channel_message_id", String(255), unique=True),  # e.g. wamid once sent
         Column("attempts", Integer, nullable=False, server_default="0"),

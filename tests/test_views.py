@@ -176,3 +176,41 @@ async def test_http_surface_401_403_404(world):
     assert client.get("/observe/costs").status_code == 403
     assert client.get(f"/observe/conversations/{uuid.uuid4()}").status_code == 404
     assert "/observe/overview" in client.get("/openapi.json").json()["paths"]
+
+
+async def test_who_wrote_each_line_is_recorded_not_guessed(world):
+    """A turn id is no proof the agent wrote it (a reminder gets one too): the author is kept."""
+    rt, anna, bora = world
+    anna_conv = read(rt, query.conversations, who(anna))[0].id
+    staff = actor_of(rt, BORA)  # any actor stands in for a member of staff
+    with rt.engine.begin() as c:
+        for author, text_, by in (("system", "reminder", None), ("staff", "from a person", staff)):
+            rt.enqueue(c, channel="whatsapp", conversation_id=anna_conv, from_number="15550000000",
+                       to=ANNA, messages=[Outbound.text_message(text_)], author=author,
+                       author_actor_id=by)  # fmt: skip
+    lines = read(rt, query.conversation, who(anna), anna_conv).lines
+    assert [(ln.direction, ln.author, ln.text) for ln in lines] == [
+        ("in", "person", "merhaba"),
+        ("out", "agent", "re: merhaba"),
+        ("out", "system", "reminder"),
+        ("out", "staff", "from a person"),
+    ]
+    assert lines[-1].author_id == staff and lines[1].author_id is None
+    assert lines[1].status in ("pending", "sent") and lines[0].status is None
+    assert len({ln.id for ln in lines}) == 4  # each line has its own id
+
+
+async def test_the_list_shows_the_last_message_and_who_wrote_it_redacted_like_the_thread(world):
+    rt, anna, _ = world
+    mine = read(rt, query.conversations, who(anna))[0]
+    assert (mine.last_text, mine.last_direction, mine.last_author) == (
+        "re: merhaba",
+        "out",
+        "agent",
+    )
+    assert mine.last_message_at >= mine.last_at  # the last message, either way; last_at: theirs
+    others = read(rt, query.conversations, who(anna, "conversations:read:all"))
+    bora_row = next(r for r in others if r.actor_id != anna)
+    assert bora_row.last_text is None and bora_row.last_author is not None  # text needs its scope
+    full = read(rt, query.conversations, who(anna, "conversations:read:all", "messages:read"))
+    assert next(r for r in full if r.actor_id != anna).last_text is not None

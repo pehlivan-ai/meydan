@@ -139,10 +139,16 @@ class ConversationRow(BaseModel):
     actor_id: uuid.UUID | None
     name: str | None
     address: str | None  # in full, masked or None, per visibility
-    last_at: datetime | None
+    last_at: datetime | None  # their last message
     messages_in: int
     turns: int
     cost_usd: Decimal | None
+    # The last message either way: when, which way, who wrote it, and its text (None: redacted,
+    # as in the thread: someone else's text needs `messages:read`).
+    last_message_at: datetime | None = None
+    last_direction: str | None = None  # "in" | "out"
+    last_author: str | None = None  # person | agent | staff | system
+    last_text: str | None = None
 
 
 def _peer(t: RuntimeTables):
@@ -225,17 +231,85 @@ def conversations(
     ]
     if rows:
         _audit(conn, t, who, visibility.addresses, "read:addresses")
+        rows = _with_last_messages(conn, t, who, rows, visibility)
     return rows
+
+
+def _delivery(r) -> str:
+    if r.read_at is not None:
+        return "read"
+    if r.delivered_at is not None:
+        return "delivered"
+    return r.status
+
+
+def _with_last_messages(
+    conn: Connection,
+    t: RuntimeTables,
+    who: Principal,
+    rows: list[ConversationRow],
+    visibility: Visibility,
+) -> list[ConversationRow]:
+    """Each row's last message either way, its author, and its text as the thread would show it."""
+    i, o = t.inbox, t.outbox
+    ids = [r.id for r in rows]
+    last_in = {
+        r.conversation_id: r
+        for r in conn.execute(
+            select(i.c.conversation_id, i.c.received_at.label("at"), i.c.text)
+            .where(i.c.conversation_id.in_(ids))
+            .ext(distinct_on(i.c.conversation_id))
+            .order_by(i.c.conversation_id, i.c.received_at.desc())
+        )
+    }
+    last_out = {
+        r.conversation_id: r
+        for r in conn.execute(
+            select(o.c.conversation_id, o.c.created_at.label("at"), o.c.message, o.c.author)
+            .where(o.c.conversation_id.in_(ids))
+            .ext(distinct_on(o.c.conversation_id))
+            .order_by(o.c.conversation_id, o.c.created_at.desc(), o.c.id.desc())
+        )
+    }
+    own = {row.conversation_id for row in conn.execute(_own_conversations(t, who.actor_id))}
+    reads_others = visibility.sees(who, "message_text")
+    out, shown_others = [], False
+    for row in rows:
+        a, b = last_in.get(row.id), last_out.get(row.id)
+        if a is None and b is None:
+            out.append(row)
+            continue
+        inbound = b is None or (a is not None and a.at >= b.at)
+        text_ = a.text if inbound else (b.message or {}).get("text")
+        visible = row.id in own or reads_others
+        shown_others |= visible and row.id not in own and text_ is not None
+        out.append(row.model_copy(update={
+            "last_message_at": a.at if inbound else b.at,
+            "last_direction": "in" if inbound else "out",
+            "last_author": "person" if inbound else b.author,
+            "last_text": text_ if visible else None,
+        }))  # fmt: skip
+    if shown_others:
+        _audit(conn, t, who, visibility.message_text, "read:messages")
+    return out
 
 
 # --- one conversation ------------------------------------------------------------------------
 
 
 class Line(BaseModel):
+    id: str  # "in:<id>" | "out:<id>": stable, for an app to point at one message
     at: datetime
     direction: str  # "in" | "out"
     text: str | None  # None: redacted (no `messages:read`)
     turn_id: uuid.UUID | None
+    # Who wrote it: person (them) | agent | staff (`author_id`: who) | system. Recorded when the
+    # message was queued (outbox.author), never inferred.
+    author: str
+    author_id: uuid.UUID | None = None
+    # Ours only: pending | held | sent | delivered | read | failed | dead (receipts win over the
+    # send status: a read message was delivered).
+    status: str | None = None
 
 
 class TurnView(BaseModel):
@@ -289,24 +363,42 @@ def conversation(
     show_costs = visibility.sees(who, "costs")
 
     ins = conn.execute(
-        select(i.c.received_at, i.c.text, i.c.processed_at)
+        select(i.c.id, i.c.received_at, i.c.text, i.c.processed_at)
         .where(i.c.conversation_id == conversation_id)
         .order_by(i.c.received_at.desc())
         .limit(limit)
     ).all()
     outs = conn.execute(
-        select(o.c.created_at, o.c.message, o.c.turn_id)
+        select(
+            o.c.id,
+            o.c.created_at,
+            o.c.message,
+            o.c.turn_id,
+            o.c.author,
+            o.c.author_actor_id,
+            o.c.status,
+            o.c.delivered_at,
+            o.c.read_at,
+        )
         .where(o.c.conversation_id == conversation_id)
         .order_by(o.c.created_at.desc())
         .limit(limit)
     ).all()
-    lines = [Line(at=r.received_at, direction="in", text=r.text, turn_id=None) for r in ins]
+    lines = [
+        Line(id=f"in:{r.id}", at=r.received_at, direction="in", text=r.text, turn_id=None,
+             author="person")
+        for r in ins
+    ]  # fmt: skip
     lines += [
         Line(
+            id=f"out:{r.id}",
             at=r.created_at,
             direction="out",
             text=(r.message or {}).get("text"),
             turn_id=r.turn_id,
+            author=r.author,
+            author_id=r.author_actor_id,
+            status=_delivery(r),
         )
         for r in outs
     ]

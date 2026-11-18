@@ -127,12 +127,14 @@ class Runtime:
         recipient_identity_id: uuid.UUID | None = None,
         start_at: datetime | None = None,
         turn_id: uuid.UUID | None = None,
+        author: str = "system",
+        author_actor_id: uuid.UUID | None = None,
     ) -> uuid.UUID | None:
         """See `Outbox.enqueue`."""
         return self._outbox.enqueue(
             conn, channel=channel, conversation_id=conversation_id, from_number=from_number,
             to=to, messages=messages, recipient_identity_id=recipient_identity_id,
-            start_at=start_at, turn_id=turn_id,
+            start_at=start_at, turn_id=turn_id, author=author, author_actor_id=author_actor_id,
         )  # fmt: skip
 
     def transcript(

@@ -176,6 +176,7 @@ class Worker(_Part):
                     recipient_identity_id=turn.sender_identity_id,
                     messages=replies,
                     turn_id=ctx.turn_id,
+                    author="agent",  # the turn's own reply
                 )
                 self._mark_processed(conn, ids)
                 write_turn(
