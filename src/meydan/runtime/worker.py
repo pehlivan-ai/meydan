@@ -16,9 +16,22 @@ from meydan.channels.base import Address, Inbound, Outbound
 from meydan.observe.context import TurnContext, turn_scope
 from meydan.observe.record import write_turn
 from meydan.runtime.failures import Failure, classify
+from meydan.runtime.tables import RuntimeTables
 from meydan.runtime.types import Turn, _clock, _Part
 
 log = logging.getLogger("meydan.runtime")
+
+
+def _held(conn: Connection, t: RuntimeTables, conversation_id: uuid.UUID) -> bool:
+    h = t.desk_holds
+    return bool(
+        conn.scalar(
+            select(func.count()).where(
+                h.c.conversation_id == conversation_id,
+                (h.c.until.is_(None)) | (h.c.until > func.now()),
+            )
+        )
+    )
 
 
 class Worker(_Part):
@@ -142,8 +155,13 @@ class Worker(_Part):
             if not rows:
                 trans.rollback()
                 return 0
-            turn = _turn_from_rows(key, rows)
             ids = [r["id"] for r in rows]
+            if await asyncio.to_thread(_held, conn, self.t, key):
+                # Someone on the team holds it (meydan.desk): received and recorded, no answer.
+                await asyncio.to_thread(self._mark_processed, conn, ids)
+                trans.commit()
+                return 0
+            turn = _turn_from_rows(key, rows)
             last = rows[-1]["message_id"]
             started_at = await asyncio.to_thread(conn.scalar, select(_clock()))
             ctx = TurnContext(uuid.uuid4(), key, turn.actor_id)
