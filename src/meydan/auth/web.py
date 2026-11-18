@@ -62,6 +62,10 @@ class CodeTyped(BaseModel):
     code: str
 
 
+# A service key's request may name the person it acts for (see core.issue_service_key).
+ON_BEHALF_OF = "X-On-Behalf-Of"
+
+
 class Auth:
     def __init__(
         self,
@@ -204,6 +208,9 @@ class Auth:
             if self.resolve_scopes is not None:
                 extra = await self.resolve_scopes(found.actor_id)
                 found = dataclasses.replace(found, scopes=found.scopes | extra)
+            if found.service:  # whom a service says it acts for: recorded, never authority
+                said = request.headers.get(ON_BEHALF_OF, "").strip()[:200]
+                found = dataclasses.replace(found, on_behalf_of=said or None)
             return found
 
         return signed_in

@@ -9,7 +9,14 @@ from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text, update
 
-from meydan.auth import AuthConfig, Principal, grant, sign_in_interceptor
+from meydan.auth import (
+    AuthConfig,
+    Principal,
+    grant,
+    issue_service_key,
+    revoke_service_key,
+    sign_in_interceptor,
+)
 from meydan.auth.web import Auth
 from meydan.channels.base import Outbound
 
@@ -125,3 +132,45 @@ async def test_secrets_are_stored_only_as_hashes(setup):
         rows = c.execute(select(rt.t.sign_ins)).all() + c.execute(select(rt.t.sessions)).all()
     dump = str(rows)
     assert started["code"] not in dump and token not in dump
+
+
+# --- service keys: another application calling this app's API as itself ---------------------
+
+
+def test_a_service_key_reads_as_its_own_actor_with_only_its_scopes(setup):
+    rt, auth, client, admin = setup
+    with rt.engine.begin() as c:
+        actor, token = issue_service_key(c, rt.t, "dashboard", {"costs:read"}, audience="ops")
+        kind = c.scalar(select(rt.t.actors.c.kind).where(rt.t.actors.c.id == actor))
+        stored = c.scalar(
+            select(rt.t.sessions.c.token_hash).where(rt.t.sessions.c.actor_id == actor)
+        )
+    assert kind == "agent" and stored != token  # the key is shown once, kept only as a hash
+    bearer = {"Authorization": f"Bearer {token}"}
+    me = client.get("/me", headers=bearer).json()
+    assert me == {"actor": str(actor), "scopes": ["costs:read"]}  # not ops: only what it was given
+    assert client.get("/costs", headers=bearer).status_code == 200
+    with rt.engine.begin() as c:
+        revoke_service_key(c, rt.t, actor)
+    assert client.get("/me", headers=bearer).status_code == 401
+
+
+def test_on_behalf_of_is_recorded_for_a_service_and_ignored_for_a_person(setup):
+    rt, auth, client, admin = setup
+    with rt.engine.begin() as c:
+        _, token = issue_service_key(c, rt.t, "dashboard", {"ops"}, audience="ops")
+    seen = {}
+
+    @client.app.get("/who")
+    def who(person: Annotated[Principal, Depends(auth.signed_in)]) -> dict:
+        seen["by"] = person.on_behalf_of
+        return {}
+
+    client.get(
+        "/who", headers={"Authorization": f"Bearer {token}", "X-On-Behalf-Of": "crm:user/42"}
+    )
+    assert seen["by"] == "crm:user/42"  # an id in the calling app: headers are ASCII
+    sign_in(rt, client)
+    client.get("/auth/sign-in")
+    client.get("/who", headers={"X-On-Behalf-Of": "someone else"})
+    assert seen["by"] is None  # a person speaks for themselves only

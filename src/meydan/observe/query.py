@@ -51,7 +51,12 @@ def _audit(
     """Record that this person was shown an audited item."""
     if rule.audit and who.has(rule.scope):
         conn.execute(
-            insert(t.audit).values(actor_id=who.actor_id, action=action, subject_id=subject_id)
+            insert(t.audit).values(
+                actor_id=who.actor_id,
+                action=action,
+                subject_id=subject_id,
+                on_behalf_of=who.on_behalf_of,
+            )
         )
 
 

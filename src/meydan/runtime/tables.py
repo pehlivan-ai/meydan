@@ -376,6 +376,8 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         Column("actor_id", UUID(as_uuid=True), ref("actors"), nullable=False),
         Column("action", String(60), nullable=False),  # e.g. "read:messages"
         Column("subject_id", UUID(as_uuid=True)),  # e.g. the conversation
+        # A service key reading for someone (X-On-Behalf-Of): who, as the service said it.
+        Column("on_behalf_of", String(200)),
     )
     Index(f"ix_{prefix}audit_actor", audit.c.actor_id, audit.c.at)
 
