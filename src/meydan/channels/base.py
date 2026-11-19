@@ -27,6 +27,19 @@ class Address:
 
 
 @dataclass(frozen=True)
+class Choice:
+    """One option of a choices message: `id` comes back when it is picked (the app's own key),
+    `title` is what the person sees and taps, `description` an optional line under it."""
+
+    id: str
+    title: str
+    description: str | None = None
+
+
+CHOICES_MAX = 10  # the most options one message offers (WhatsApp's list: 10 rows)
+
+
+@dataclass(frozen=True)
 class Inbound:
     """One message someone sent to one of our endpoints."""
 
@@ -104,10 +117,10 @@ class EndpointUpdate:
 
 @dataclass(frozen=True)
 class Outbound:
-    """Something to send in a conversation: free-form text, an approved template or a location
-    (a map pin)."""
+    """Something to send in a conversation: free-form text, an approved template, a location
+    (a map pin) or choices (a question with options to tap)."""
 
-    kind: Literal["text", "template", "location"]
+    kind: Literal["text", "template", "location", "choices"]
     text: str = ""
     template: str | None = None
     language: str | None = None
@@ -126,6 +139,11 @@ class Outbound:
     lng: float | None = None
     place: str | None = None
     address: str | None = None
+    # Choices: the question (`body`), its options, and the label of the button that opens them
+    # when a channel shows them as a list (WhatsApp: 4+ options, or ones with descriptions).
+    body: str | None = None
+    choices: tuple[Choice, ...] = ()
+    choices_label: str | None = None
 
     @classmethod
     def text_message(cls, text: str, *, ref: str | None = None) -> "Outbound":
@@ -178,6 +196,34 @@ class Outbound:
             kind="location", text=text, lat=lat, lng=lng, place=place, address=address, ref=ref
         )
 
+    @classmethod
+    def choices_message(
+        cls,
+        body: str,
+        choices: "list[Choice] | tuple[Choice, ...]",
+        *,
+        label: str | None = None,
+        ref: str | None = None,
+    ) -> "Outbound":
+        """A question with 1-10 options to tap; the picked option's `id` comes back
+        (`reply_payload`). `text` keeps the question and the options, so transcripts show what
+        was offered. How it looks is the channel's call (WhatsApp: up to 3 short options as
+        buttons, else a list opened by `label`)."""
+        choices = tuple(choices)
+        if not body.strip():
+            raise ValueError("choices need a question")
+        if not 1 <= len(choices) <= CHOICES_MAX:
+            raise ValueError(f"choices: 1-{CHOICES_MAX} options, got {len(choices)}")
+        if any(not c.id or not c.title.strip() for c in choices):
+            raise ValueError("every option needs an id and a title")
+        if len({c.id for c in choices}) < len(choices):
+            raise ValueError("option ids must differ")
+        if len({c.title.casefold() for c in choices}) < len(choices):
+            raise ValueError("option titles must differ")
+        text = "\n".join([body, *(f"• {c.title}" for c in choices)])
+        return cls(kind="choices", text=text, body=body, choices=choices, choices_label=label,
+                   ref=ref)  # fmt: skip
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
@@ -192,11 +238,22 @@ class Outbound:
             "lng": self.lng,
             "place": self.place,
             "address": self.address,
+            "body": self.body,
+            "choices": [
+                {"id": c.id, "title": c.title, "description": c.description} for c in self.choices
+            ],
+            "choices_label": self.choices_label,
         }
 
     @classmethod
     def from_payload(cls, data: dict[str, Any]) -> "Outbound":
-        return cls(**{**data, "buttons": tuple(data.get("buttons") or ())})
+        return cls(
+            **{
+                **data,
+                "buttons": tuple(data.get("buttons") or ()),
+                "choices": tuple(Choice(**c) for c in data.get("choices") or ()),
+            }
+        )
 
 
 class SendError(Exception):

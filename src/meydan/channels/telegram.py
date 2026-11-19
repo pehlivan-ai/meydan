@@ -159,6 +159,18 @@ class Telegram:
                 from_number, "sendLocation", chat_id=chat, latitude=message.lat,
                 longitude=message.lng,
             )  # fmt: skip
+        elif message.kind == "choices":
+            long = [c for c in message.choices if len(c.id.encode()) > CALLBACK_DATA_MAX]
+            if long:
+                raise SendError(
+                    f"choices: an option id is over {CALLBACK_DATA_MAX} bytes", retryable=False
+                )
+            # One option per row (titles can be long); the press carries the option's id.
+            rows = [[{"text": c.title, "callback_data": c.id}] for c in message.choices]
+            sent = await self.call(
+                from_number, "sendMessage", chat_id=chat, **self._text(message.body or ""),
+                reply_markup={"inline_keyboard": rows},
+            )  # fmt: skip
         elif message.kind == "template":
             text, labels = self._render(message)
             if len(labels) != len(message.buttons):
@@ -232,10 +244,15 @@ def parse_messages(bot: str, updates: Iterable[dict[str, Any]]) -> list[Inbound]
             asked = press.get("message") or {}
             chat = (asked.get("chat") or {}).get("id")
             mid = f"{bot}:cb:{press['id']}"
+            data = press.get("data", "")
+            # The pressed button's label, from the message it was on: what the person tapped.
+            keys = ((asked.get("reply_markup") or {}).get("inline_keyboard")) or []
+            label = next((b.get("text", "") for row in keys for b in row
+                          if b.get("callback_data") == data), "")  # fmt: skip
             out.append(
                 Inbound(
-                    CHANNEL, mid, to, sender, datetime.now(UTC), "button", "",
-                    {"id": mid, "button": {"payload": press.get("data", ""), "text": ""}},
+                    CHANNEL, mid, to, sender, datetime.now(UTC), "button", label,
+                    {"id": mid, "button": {"payload": data, "text": label}},
                     sender_name=name, attrs=attrs,
                     reply_to=f"{bot}:{chat}:{asked['message_id']}" if chat is not None else None,
                 )

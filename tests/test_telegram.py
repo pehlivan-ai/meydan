@@ -200,3 +200,32 @@ async def test_a_second_reader_is_waited_out_quietly_then_named_plainly(caplog, 
     assert any("another reader is still open" in m for m in messages)
     assert any("run one reader per bot" in m for m in messages)
     assert not any(r.exc_info for r in caplog.records)  # no stack traces for a known case
+
+
+async def test_choices_become_one_button_per_row_and_a_press_carries_its_label():
+    from meydan.channels.base import Choice
+
+    client, calls = api()
+    ask = Outbound.choices_message("Seviyen?", [Choice("l1", "Başlangıç"), Choice("l2", "Orta")])
+    await Telegram([TOKEN], client=client).send("111", "900", ask)
+    [(_, body)] = calls
+    assert body["text"] == "Seviyen?"
+    assert body["reply_markup"] == {
+        "inline_keyboard": [
+            [{"text": "Başlangıç", "callback_data": "l1"}],
+            [{"text": "Orta", "callback_data": "l2"}],
+        ]
+    }
+    press = {
+        "update_id": 9,
+        "callback_query": {
+            "id": "cb2", "data": "l2", "from": {"id": 900, "first_name": "Ada"},
+            "message": {"message_id": 43, "chat": {"id": 900, "type": "private"},
+                        "reply_markup": body["reply_markup"]},
+        },
+    }  # fmt: skip
+    [pressed] = parse_messages("111", [press])
+    assert reply_payload(pressed) == "l2" and pressed.text == "Orta"
+    with pytest.raises(SendError):
+        long = Outbound.choices_message("Q?", [Choice("x" * 65, "A")])
+        await Telegram([TOKEN], client=client).send("111", "900", long)

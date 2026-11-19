@@ -72,6 +72,35 @@ async def reply(turn: Turn) -> list[Outbound]:
 To describe `bubbles` to the model in your own words, declare the field again in the subclass
 with your own `Field(description=...)`.
 
+## Choices
+
+A question with options to tap, instead of an answer typed in words:
+
+```python
+from meydan.channels import Choice
+
+Outbound.choices_message(
+    "What's your level?",
+    [Choice("lvl:1", "Beginner", "Just started"), Choice("lvl:2", "Intermediate"), ...],
+    label="Pick one",  # the button that opens a list
+)
+```
+
+- 1-10 options; ids and titles must differ. The picked option's `id` comes back:
+  `meydan.channels.whatsapp.reply_payload(message)` (a button or a list row alike), and the
+  message's `text` is its title, so a model reading the conversation sees what was tapped.
+- The channel decides how it looks. WhatsApp: up to 3 options with titles up to 20 characters and
+  no descriptions are reply buttons (one tap); anything else is a list (up to 10 rows, titles up
+  to 24, descriptions up to 72, opened by `label`, up to 20). `whatsapp.choice_style(message)`
+  says which, or raises `ValueError` when neither fits, so you can check before queueing. Telegram:
+  one inline button per row.
+- `text` keeps the question and the options (`"question\n• A\n• B"`), so transcripts show what
+  was offered.
+- Choices are free-form (no template): WhatsApp sends them only inside the 24 h window.
+
+As with a pin, let the model name the options as its own field and build the message in code; for
+a form, take the options from your data, not from the model.
+
 ## None of this is required
 
 The defaults are a recommendation, not a rule. A turn's handler returns a list of `Outbound`,

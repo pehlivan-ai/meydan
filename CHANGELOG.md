@@ -6,6 +6,20 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.30.0] - 2026-11-19
+### Added
+- `Outbound.choices_message(question, [Choice(id, title, description)], label=)`: a question with
+  1-10 options to tap (`meydan.channels.Choice`). WhatsApp shows up to 3 short options as reply
+  buttons and anything else as a list (`whatsapp.choice_style` says which, or raises
+  `ValueError` when neither fits; such a message fails to send without retries). Telegram: one
+  inline button per row. `text` keeps the question and the options for transcripts. See
+  docs/reply.md#choices.
+### Changed
+- `whatsapp.reply_payload` also returns a list row's id (`list_reply`), not only a button's.
+- Telegram: a button press's text is the pressed button's label (it was empty).
+### Upgrading
+- Nothing to migrate. Outbox rows written before keep loading (`choices` defaults to none).
+
 ## [0.29.0] - 2026-11-19
 ### Added
 - `notify.Kind` / `notify.Example`: the kinds an app sends, each with an example;
