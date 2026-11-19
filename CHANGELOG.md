@@ -6,6 +6,14 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.31.0] - 2026-11-19
+### Added
+- `Outbound.contact_message(name, phone, org=, title=)`: a contact card. WhatsApp: a `contacts`
+  message whose phone carries its WhatsApp id ("Message" and "Save contact"); Telegram:
+  `sendContact`. `text` keeps the name, title, organisation and number for transcripts.
+### Upgrading
+- Nothing to migrate.
+
 ## [0.30.0] - 2026-11-19
 ### Added
 - `Outbound.choices_message(question, [Choice(id, title, description)], label=)`: a question with

@@ -159,6 +159,12 @@ class Telegram:
                 from_number, "sendLocation", chat_id=chat, latitude=message.lat,
                 longitude=message.lng,
             )  # fmt: skip
+        elif message.kind == "contact":
+            first, _, last = (message.contact_name or "").partition(" ")
+            sent = await self.call(
+                from_number, "sendContact", chat_id=chat, phone_number=message.contact_phone,
+                first_name=first, **({"last_name": last} if last else {}),
+            )  # fmt: skip
         elif message.kind == "choices":
             long = [c for c in message.choices if len(c.id.encode()) > CALLBACK_DATA_MAX]
             if long:
