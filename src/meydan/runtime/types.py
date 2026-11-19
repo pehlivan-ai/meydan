@@ -66,6 +66,9 @@ class Intercepted:
 
 # Looks at each new message before any turn; returns Intercepted to consume it, None to pass.
 Interceptor = Callable[[Connection, Inbound, "identity.Routed"], Intercepted | None]
+# Told of a new message where it landed (`Routed.new_actor`: how we met them). Runs in the
+# receiving transaction: write what should follow (a notification) there, send nothing.
+Observer = Callable[[Connection, Inbound, "identity.Routed"], None]
 Handler = Callable[[Turn], Awaitable[Sequence[Outbound]]]
 # What the person is sent when a turn is given up (`on_failure`) or first put off (`on_delay`).
 # The second argument is a `meydan.runtime.failures.Failure`: its `kind`, `group`, `error`.
@@ -114,6 +117,7 @@ class _Part:
     on_delay = property(lambda self: self.rt.on_delay)
     rules = property(lambda self: self.rt.rules)
     intercept = property(lambda self: self.rt.intercept)
+    on_receive = property(lambda self: self.rt.on_receive)
 
     def enqueue(self, conn: Connection, **kwargs: Any) -> uuid.UUID | None:
         return self.rt.enqueue(conn, **kwargs)

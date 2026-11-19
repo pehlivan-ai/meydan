@@ -52,6 +52,7 @@ CLAIM_END_REASONS = ("revoked", "superseded", "dismissed", "expired")
 CONVERSATION_KINDS = ("direct", "thread", "group")
 PARTICIPANT_ROLES = ("self", "peer", "observer")
 TURN_STATUSES = ("replied", "failed", "gave_up")
+DELIVERY_STATUSES = ("pending", "sent", "gone", "failed")
 COST_SOURCES = ("provider", "estimate", "mixed")
 
 
@@ -77,6 +78,9 @@ class RuntimeTables:
     expectations: Table
     operator_reads: Table
     operator_holds: Table
+    notify_subscriptions: Table
+    notifications: Table
+    notify_deliveries: Table
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -525,6 +529,54 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         now_col("at"),
     )
 
+    # Notifications (meydan.notify): to the team's own devices, not to the people we talk with.
+    # A device that said yes (Web Push). `subscriber` is a principal as text, like a reader.
+    notify_subscriptions = Table(
+        f"{prefix}notify_subscriptions",
+        metadata,
+        id_col(),
+        Column("subscriber", String(200), nullable=False),
+        Column("endpoint", Text, nullable=False, unique=True),  # the push service's URL for it
+        Column("p256dh", String(200), nullable=False),  # the device's public key (RFC 8291)
+        Column("auth", String(64), nullable=False),  # the shared auth secret (RFC 8291)
+        now_col("created_at"),
+        Column("last_ok_at", DateTime(timezone=True)),
+    )
+    Index(f"ix_{prefix}notify_subscriptions_subscriber", notify_subscriptions.c.subscriber)
+    # What was said, once; `kind` is the app's word for it (e.g. "new_person").
+    notifications = Table(
+        f"{prefix}notifications",
+        metadata,
+        id_col(),
+        Column("kind", String(64), nullable=False),
+        Column("payload", JSONB, nullable=False),
+        now_col("created_at"),
+    )
+    # One row per device it goes to. A device that is gone (404/410) takes its rows with it.
+    notify_deliveries = Table(
+        f"{prefix}notify_deliveries",
+        metadata,
+        Column("notification_id", UUID(as_uuid=True), ref("notifications"), nullable=False),
+        Column(
+            "subscription_id",
+            UUID(as_uuid=True),
+            ref("notify_subscriptions", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        Column("status", String(16), nullable=False, server_default="pending"),
+        Column("attempts", Integer, nullable=False, server_default="0"),
+        now_col("next_at"),
+        Column("sent_at", DateTime(timezone=True)),
+        Column("last_error", Text),
+        PrimaryKeyConstraint("notification_id", "subscription_id"),
+        CheckConstraint(_in("status", DELIVERY_STATUSES), name="status"),
+    )
+    Index(
+        f"ix_{prefix}notify_deliveries_due",
+        notify_deliveries.c.next_at,
+        postgresql_where=notify_deliveries.c.status == "pending",
+    )
+
     return RuntimeTables(
         actors=actors,
         identities=identities,
@@ -546,4 +598,7 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         expectations=expectations,
         operator_reads=operator_reads,
         operator_holds=operator_holds,
+        notify_subscriptions=notify_subscriptions,
+        notifications=notifications,
+        notify_deliveries=notify_deliveries,
     )

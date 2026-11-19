@@ -42,6 +42,7 @@ class Routed:
     sender_identity_id: uuid.UUID
     actor_id: uuid.UUID  # the sender's owner at the time of the message
     endpoint_identity_id: uuid.UUID
+    new_actor: bool = False  # this message is how we met them: no actor owned any address before
 
 
 @dataclass(frozen=True)
@@ -341,6 +342,7 @@ def route(
     sender_attrs = {k: v for k, v in {"name": name, **(attrs or {})}.items() if v}
     sender_id = resolve(conn, t, sender, **sender_attrs)
     also_ids = [resolve(conn, t, a, **sender_attrs) for a in also if a != sender]
+    known = any(owner(conn, t, i) for i in [sender_id, *also_ids])
     actor = settle(conn, t, sender_id, also_ids, evidence=evidence or {}, name=name)
     if name:
         conn.execute(
@@ -349,4 +351,4 @@ def route(
             .values(name=name, updated_at=func.now())
         )
     conversation = direct_conversation(conn, t, channel, endpoint_id, actor, [sender_id, *also_ids])
-    return Routed(conversation, sender_id, actor, endpoint_id)
+    return Routed(conversation, sender_id, actor, endpoint_id, new_actor=not known)
