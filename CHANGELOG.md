@@ -6,6 +6,14 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.29.0] - 2026-11-19
+### Added
+- `notify.Kind` / `notify.Example`: the kinds an app sends, each with an example;
+  `notify.test` sends a kind's example to one subscriber's own devices.
+- Routes: `GET /notify/kinds`, `POST /notify/test` (`notify:subscribe`), and
+  `POST /notify/notifications` (`notify:send`) for another system of the organisation sending
+  through the same pipe (declared kinds only, links inside the app).
+
 ## [0.28.0] - 2026-11-19
 ### Added
 - `meydan.notify` (extra `notify`): notifications to the team's own devices over Web Push.
