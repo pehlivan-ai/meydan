@@ -101,6 +101,14 @@ Outbound.choices_message(
 As with a pin, let the model name the options as its own field and build the message in code; for
 a form, take the options from your data, not from the model.
 
+## A contact card
+
+`Outbound.contact_message(name, phone, org=, title=)`: a person someone can message, call or save
+in one tap (`phone` E.164 with "+"). On WhatsApp the card carries the number's WhatsApp id, so it
+shows "Message" and "Save contact" (without one WhatsApp would offer only "Invite"); on Telegram it
+is a contact. `text` keeps the name, title, organisation and number for transcripts. As with a
+pin, let the model ask for the card by a field and fill the number in from your own settings.
+
 ## None of this is required
 
 The defaults are a recommendation, not a rule. A turn's handler returns a list of `Outbound`,

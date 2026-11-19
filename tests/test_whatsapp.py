@@ -358,3 +358,32 @@ def test_list_reply_payload_is_the_row_id():
 
     assert reply_payload(inbound({"type": "list_reply", "list_reply": {"id": "l4"}})) == "l4"
     assert reply_payload(inbound({"type": "button_reply", "button_reply": {"id": "y"}})) == "y"
+
+
+async def test_send_a_contact_card_people_can_message_or_save():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"messages": [{"id": "wamid.K"}]})
+
+    card = Outbound.contact_message("Ada Kaya", "+905550000002", org="Club", title="Partnerships")
+    assert await cloud(handler).send("222", "905550000001", card) == "wamid.K"
+    assert seen[0]["type"] == "contacts"
+    assert seen[0]["contacts"] == [
+        {
+            "name": {"formatted_name": "Ada Kaya", "first_name": "Ada", "last_name": "Kaya"},
+            "phones": [{"phone": "+905550000002", "type": "WORK", "wa_id": "905550000002"}],
+            "org": {"company": "Club", "title": "Partnerships"},
+        }
+    ]
+    assert card.text == "Ada Kaya\nPartnerships\nClub\n+905550000002"  # what transcripts show
+    assert Outbound.from_payload(card.to_payload()) == card
+    bare = Outbound.contact_message("Ada", "+905550000002")
+    await cloud(handler).send("222", "905550000001", bare)
+    assert "org" not in seen[1]["contacts"][0] and "last_name" not in seen[1]["contacts"][0]["name"]
+    for phone in ("05550000002", "+90 555", "+abc"):
+        with pytest.raises(ValueError):
+            Outbound.contact_message("Ada", phone)
+    with pytest.raises(ValueError):
+        Outbound.contact_message(" ", "+905550000002")

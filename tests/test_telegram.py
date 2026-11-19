@@ -229,3 +229,12 @@ async def test_choices_become_one_button_per_row_and_a_press_carries_its_label()
     with pytest.raises(SendError):
         long = Outbound.choices_message("Q?", [Choice("x" * 65, "A")])
         await Telegram([TOKEN], client=client).send("111", "900", long)
+
+
+async def test_a_contact_card_goes_as_a_telegram_contact():
+    client, calls = api()
+    card = Outbound.contact_message("Ada Kaya", "+905550000002")
+    await Telegram([TOKEN], client=client).send("111", "900", card)
+    [(path, body)] = calls
+    assert path.endswith("/sendContact") and body["phone_number"] == "+905550000002"
+    assert (body["first_name"], body["last_name"]) == ("Ada", "Kaya")

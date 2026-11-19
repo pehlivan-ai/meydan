@@ -118,9 +118,9 @@ class EndpointUpdate:
 @dataclass(frozen=True)
 class Outbound:
     """Something to send in a conversation: free-form text, an approved template, a location
-    (a map pin) or choices (a question with options to tap)."""
+    (a map pin), choices (a question with options to tap) or a contact card."""
 
-    kind: Literal["text", "template", "location", "choices"]
+    kind: Literal["text", "template", "location", "choices", "contact"]
     text: str = ""
     template: str | None = None
     language: str | None = None
@@ -144,6 +144,12 @@ class Outbound:
     body: str | None = None
     choices: tuple[Choice, ...] = ()
     choices_label: str | None = None
+    # A contact card: a person's name and phone number (E.164 with "+"), with an optional
+    # organisation and title.
+    contact_name: str | None = None
+    contact_phone: str | None = None
+    contact_org: str | None = None
+    contact_title: str | None = None
 
     @classmethod
     def text_message(cls, text: str, *, ref: str | None = None) -> "Outbound":
@@ -224,6 +230,26 @@ class Outbound:
         return cls(kind="choices", text=text, body=body, choices=choices, choices_label=label,
                    ref=ref)  # fmt: skip
 
+    @classmethod
+    def contact_message(
+        cls,
+        name: str,
+        phone: str,
+        *,
+        org: str | None = None,
+        title: str | None = None,
+        ref: str | None = None,
+    ) -> "Outbound":
+        """A contact card someone can message, call or save. `phone` is E.164 with "+".
+        `text` keeps the name and number, so transcripts show whose card was sent."""
+        if not name.strip():
+            raise ValueError("a contact card needs a name")
+        if not (phone.startswith("+") and phone[1:].isdigit() and 8 <= len(phone) <= 16):
+            raise ValueError("a contact card's phone is E.164 with '+', e.g. +15550001111")
+        text = "\n".join(x for x in (name, title, org, phone) if x)
+        return cls(kind="contact", text=text, contact_name=name, contact_phone=phone,
+                   contact_org=org, contact_title=title, ref=ref)  # fmt: skip
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
@@ -243,6 +269,10 @@ class Outbound:
                 {"id": c.id, "title": c.title, "description": c.description} for c in self.choices
             ],
             "choices_label": self.choices_label,
+            "contact_name": self.contact_name,
+            "contact_phone": self.contact_phone,
+            "contact_org": self.contact_org,
+            "contact_title": self.contact_title,
         }
 
     @classmethod

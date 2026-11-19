@@ -571,6 +571,27 @@ class WhatsAppCloud:
             location |= {"name": message.place} if message.place else {}
             location |= {"address": message.address} if message.address else {}
             body |= {"type": "location", "location": location}
+        elif message.kind == "contact":
+            # wa_id makes WhatsApp show "Message" and "Save contact" (without it: "Invite").
+            name, _, rest = (message.contact_name or "").partition(" ")
+            card: dict[str, Any] = {
+                "name": {"formatted_name": message.contact_name, "first_name": name}
+                | ({"last_name": rest} if rest else {}),
+                "phones": [
+                    {
+                        "phone": message.contact_phone,
+                        "type": "WORK",
+                        "wa_id": (message.contact_phone or "").lstrip("+"),
+                    }
+                ],
+            }
+            if message.contact_org or message.contact_title:
+                card["org"] = {
+                    k: v
+                    for k, v in (("company", message.contact_org), ("title", message.contact_title))
+                    if v
+                }
+            body |= {"type": "contacts", "contacts": [card]}
         elif message.kind == "choices":
             try:
                 body |= {"type": "interactive", "interactive": _interactive(message)}
