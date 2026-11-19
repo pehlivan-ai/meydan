@@ -286,3 +286,75 @@ def test_a_button_press_says_which_message_it_answers():
         )
     )  # fmt: skip
     assert m.reply_to == "wamid.OURS"
+
+
+async def test_send_choices_as_buttons_or_list():
+    from meydan.channels.base import Choice
+    from meydan.channels.whatsapp import choice_style
+
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"messages": [{"id": "wamid.C"}]})
+
+    yes_no = Outbound.choices_message(
+        "Join?", [Choice("y", "Yes"), Choice("n", "No")], label="Options", ref="q:1"
+    )
+    assert choice_style(yes_no) == "buttons"
+    assert await cloud(handler).send("222", "905550000001", yes_no) == "wamid.C"
+    assert seen[0]["type"] == "interactive"
+    assert seen[0]["interactive"] == {
+        "type": "button",
+        "body": {"text": "Join?"},
+        "action": {
+            "buttons": [
+                {"type": "reply", "reply": {"id": "y", "title": "Yes"}},
+                {"type": "reply", "reply": {"id": "n", "title": "No"}},
+            ]
+        },
+    }
+    assert yes_no.text == "Join?\n• Yes\n• No"  # what transcripts show
+    assert Outbound.from_payload(yes_no.to_payload()) == yes_no  # survives the outbox
+
+    levels = [
+        Choice(f"l{i}", f"Level {i}", "how you play" if i == 1 else None) for i in range(1, 8)
+    ]
+    many = Outbound.choices_message("Your level?", levels, label="Pick")
+    assert choice_style(many) == "list"
+    await cloud(handler).send("222", "905550000001", many)
+    inter = seen[1]["interactive"]
+    assert inter["type"] == "list"
+    assert inter["action"]["button"] == "Pick"
+    rows = inter["action"]["sections"][0]["rows"]
+    assert rows[0] == {"id": "l1", "title": "Level 1", "description": "how you play"}
+    assert rows[1] == {"id": "l2", "title": "Level 2"} and len(rows) == 7
+
+    # A description alone makes it a list, so a label is needed; without one it never fits.
+    no_label = Outbound.choices_message("Q?", [Choice("a", "A", "more")])
+    with pytest.raises(ValueError, match="no list label"):
+        choice_style(no_label)
+    with pytest.raises(SendError) as e:
+        await cloud(handler).send("222", "905550000001", no_label)
+    assert not e.value.retryable
+
+    with pytest.raises(ValueError):
+        Outbound.choices_message("Q?", [Choice(str(i), str(i)) for i in range(11)])
+    with pytest.raises(ValueError):
+        Outbound.choices_message("Q?", [Choice("a", "Same"), Choice("b", "same")])
+    with pytest.raises(ValueError):
+        Outbound.choices_message(" ", [Choice("a", "A")])
+
+
+def test_list_reply_payload_is_the_row_id():
+    from meydan.channels.base import Inbound
+    from meydan.channels.whatsapp import reply_payload
+
+    def inbound(inter):
+        return Inbound(
+            "whatsapp", "wamid.R", None, None, None, "interactive", "",
+            {"interactive": inter},
+        )  # fmt: skip
+
+    assert reply_payload(inbound({"type": "list_reply", "list_reply": {"id": "l4"}})) == "l4"
+    assert reply_payload(inbound({"type": "button_reply", "button_reply": {"id": "y"}})) == "y"

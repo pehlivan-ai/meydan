@@ -10,7 +10,7 @@ import hmac
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Literal
 
 import httpx
 
@@ -118,9 +118,68 @@ def reply_payload(message: Inbound) -> str | None:
     if message.kind == "button":
         return raw.get("button", {}).get("payload")
     if message.kind == "interactive":
-        reply = raw.get("interactive", {}).get("button_reply") or {}
+        inter = raw.get("interactive", {})
+        reply = inter.get("button_reply") or inter.get("list_reply") or {}
         return reply.get("id")
     return None
+
+
+# Interactive message limits. Meta, Cloud API "Interactive reply buttons messages" and
+# "Interactive list messages".
+BUTTONS_MAX, BUTTON_TITLE_MAX, BUTTONS_BODY_MAX, BUTTON_ID_MAX = 3, 20, 1024, 256
+ROWS_MAX, ROW_TITLE_MAX, ROW_DESCRIPTION_MAX, ROW_ID_MAX = 10, 24, 72, 200
+LIST_BODY_MAX, LIST_LABEL_MAX = 4096, 20
+
+
+def choice_style(message: Outbound) -> Literal["buttons", "list"]:
+    """How WhatsApp shows these choices: reply buttons when there are up to 3 short options
+    without descriptions (one tap), else a list (up to 10 rows, a description under each, opened
+    by `choices_label`). Raises ValueError when neither fits, so an app can check before it
+    queues the message."""
+    c, body = message.choices, message.body or ""
+    if (
+        len(c) <= BUTTONS_MAX
+        and len(body) <= BUTTONS_BODY_MAX
+        and all(len(x.title) <= BUTTON_TITLE_MAX and not x.description for x in c)
+        and all(len(x.id) <= BUTTON_ID_MAX for x in c)
+    ):
+        return "buttons"
+    problems = [
+        f"over {ROWS_MAX} options" if len(c) > ROWS_MAX else "",
+        f"question over {LIST_BODY_MAX} characters" if len(body) > LIST_BODY_MAX else "",
+        f"a title over {ROW_TITLE_MAX} characters" if any(len(x.title) > ROW_TITLE_MAX for x in c)
+        else "",
+        f"a description over {ROW_DESCRIPTION_MAX} characters"
+        if any(len(x.description or "") > ROW_DESCRIPTION_MAX for x in c) else "",
+        f"an id over {ROW_ID_MAX} characters" if any(len(x.id) > ROW_ID_MAX for x in c) else "",
+        "no list label" if not message.choices_label else "",
+        f"a list label over {LIST_LABEL_MAX} characters"
+        if len(message.choices_label or "") > LIST_LABEL_MAX else "",
+    ]  # fmt: skip
+    if problems := [p for p in problems if p]:
+        raise ValueError("choices don't fit WhatsApp: " + ", ".join(problems))
+    return "list"
+
+
+def _interactive(message: Outbound) -> dict[str, Any]:
+    if choice_style(message) == "buttons":
+        buttons = [
+            {"type": "reply", "reply": {"id": c.id, "title": c.title}} for c in message.choices
+        ]
+        return {"type": "button", "body": {"text": message.body}, "action": {"buttons": buttons}}
+    rows = [
+        {"id": c.id, "title": c.title} | ({"description": c.description} if c.description else {})
+        for c in message.choices
+    ]
+    # One section, titled with the label (Meta lists a section title as required).
+    return {
+        "type": "list",
+        "body": {"text": message.body},
+        "action": {
+            "button": message.choices_label,
+            "sections": [{"title": message.choices_label, "rows": rows}],
+        },
+    }
 
 
 def _values(payload: dict[str, Any]) -> Iterator[dict[str, Any]]:
@@ -512,6 +571,11 @@ class WhatsAppCloud:
             location |= {"name": message.place} if message.place else {}
             location |= {"address": message.address} if message.address else {}
             body |= {"type": "location", "location": location}
+        elif message.kind == "choices":
+            try:
+                body |= {"type": "interactive", "interactive": _interactive(message)}
+            except ValueError as e:  # never fits: no retry helps
+                raise SendError(str(e), retryable=False) from None
         else:
             params = [
                 {"type": "text", "parameter_name": k, "text": v} for k, v in message.params.items()
