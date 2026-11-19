@@ -83,3 +83,33 @@ app.include_router(notify_routes(auth, tables, engine, keys=keys), prefix="/noti
 `DELETE /notify/subscriptions` (`{"endpoint": ...}`), all with the `notify:subscribe` scope.
 Whose device it is: the person's own session, or whom a service acts for (`X-On-Behalf-Of`). An
 endpoint is one device: subscribing it again moves it to whoever subscribed last.
+
+## Kinds, and trying them
+
+Declare the kinds you send, each with an example, and give them to the routes:
+
+```python
+NEW_PERSON = notify.Kind(
+    name="new_person",
+    label="Someone new",
+    when="Someone writes for the first time.",
+    example=notify.Example(
+        title="Anna (example)", body="Hi, a question about classes", url="/inbox"
+    ),
+)
+app.include_router(
+    notify_routes(auth, tables, engine, keys=keys, kinds=[NEW_PERSON]), prefix="/notify"
+)
+```
+
+`GET /notify/kinds` lists them for a settings page, and `POST /notify/test` (`{"kind": ...}`) sends
+that kind's example to the caller's own devices only: a person sees what a kind looks like on
+their phone before the first real one happens. A new kind is one more `Kind`; its test comes with
+it.
+
+## One pipe for the organisation
+
+Another system of the same organisation (the books, the bookings) sends through the same pipe
+rather than keeping devices of its own: give it a service key with `notify:send` and it posts
+`POST /notify/notifications` (`kind`, `title`, `body`, `url`, `tag`, optional `to`). Only declared
+kinds go, and links stay inside the app (`url` starts with `/`). People turn notifications on once.

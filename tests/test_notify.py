@@ -173,3 +173,57 @@ async def test_http_subscribe_for_whom_a_service_acts(db):
     assert gone.status_code == 204
     with rt.engine.connect() as c:
         assert notify.subscribers(c, rt.t) == []
+
+
+NEW_PERSON = notify.Kind(
+    name="new_person",
+    label="Someone new",
+    when="Someone writes for the first time.",
+    example=notify.Example(
+        title="Anna (example)", body="Hi, a question about classes", url="/inbox"
+    ),
+)
+
+
+async def test_http_kinds_test_sends_the_example_only_to_my_devices_and_others_send_declared_kinds(
+    db,
+):
+    rt = make(db)
+    auth = Auth(rt.engine, rt.t, AuthConfig(audience="ops"), secure_cookies=False)
+    app = FastAPI()
+    app.include_router(
+        notify_routes(auth, rt.t, rt.engine, keys=notify.Keys.generate(), kinds=[NEW_PERSON]),
+        prefix="/notify",
+    )
+    client = TestClient(app)
+    with rt.engine.begin() as c:
+        _, key = issue_service_key(c, rt.t, "dash", {"ops", "notify:subscribe"}, audience="ops")
+        _, other_system = issue_service_key(c, rt.t, "books", {"notify:send"}, audience="ops")
+        notify.subscribe(c, rt.t, "crm:user/7", endpoint=device(1), **DEVICE)
+        notify.subscribe(c, rt.t, "crm:user/8", endpoint=device(2), **DEVICE)
+    as_ada = {"Authorization": f"Bearer {key}", "X-On-Behalf-Of": "crm:user/7"}
+    books = {"Authorization": f"Bearer {other_system}"}
+
+    assert client.get("/notify/kinds", headers=as_ada).json() == [
+        {"name": "new_person", "label": "Someone new", "when": "Someone writes for the first time."}
+    ]
+    assert client.post("/notify/test", json={"kind": "nope"}, headers=as_ada).status_code == 404
+    assert client.post("/notify/test", json={"kind": "new_person"}, headers=as_ada).json() == {
+        "devices": 1
+    }
+    push = Push()
+    notify.Pusher(rt.engine, rt.t, keys=notify.Keys.generate(), subject=SUBJECT, send=push).drain()
+    [(endpoint, sent)] = push.got
+    assert endpoint == device(1)  # only Ada's own device
+    assert sent["notification"]["title"] == "Anna (example)"
+
+    assert (
+        client.post("/notify/test", json={"kind": "new_person"}, headers=books).status_code == 403
+    )
+    paid = {"kind": "payment", "title": "Paid", "body": "x"}
+    assert client.post("/notify/notifications", json=paid, headers=books).status_code == 422
+    away = {"kind": "new_person", "title": "x", "body": "y", "url": "https://elsewhere.example"}
+    assert client.post("/notify/notifications", json=away, headers=books).status_code == 422
+    ok = {"kind": "new_person", "title": "Ben", "body": "hello", "url": "/inbox/1"}
+    assert client.post("/notify/notifications", json=ok, headers=books).json() == {"devices": 2}
+    assert client.post("/notify/notifications", json=ok, headers=as_ada).status_code == 403

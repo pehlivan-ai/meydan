@@ -153,6 +153,33 @@ def enqueue(
 
 
 @dataclass(frozen=True)
+class Kind:
+    """A kind of notification the app sends, as the team sees it: what it is called, when it comes,
+    and an example. The example is what a test sends ("show me what this looks like"), so a new kind
+    can be tried on a real phone before the first real one happens."""
+
+    name: str  # the app's word, as in `enqueue(kind=...)`
+    label: str  # what it is called, in the team's language
+    when: str  # when it comes, in a sentence
+    example: "Example"
+
+
+@dataclass(frozen=True)
+class Example:
+    title: str
+    body: str
+    url: str | None = None
+
+
+def test(conn: Connection, t: RuntimeTables, kind: Kind, subscriber: str) -> int:
+    """Send the kind's example to one subscriber's own devices (never anyone else's). Returns how
+    many devices it goes to."""
+    e = kind.example
+    return enqueue(conn, t, kind=f"test:{kind.name}", title=e.title, body=e.body, url=e.url,
+                   tag=f"test:{kind.name}", to=[subscriber])  # fmt: skip
+
+
+@dataclass(frozen=True)
 class Outcome:
     """What the push service said: `status` its HTTP status, None when it could not be reached."""
 
@@ -283,6 +310,6 @@ class Pusher:
 
 
 __all__ = [
-    "ATTEMPTS", "Keys", "Outcome", "Pusher", "enqueue", "payload", "subscribe", "subscribers",
-    "unsubscribe",
+    "ATTEMPTS", "Example", "Keys", "Kind", "Outcome", "Pusher", "enqueue", "payload", "subscribe",
+    "subscribers", "test", "unsubscribe",
 ]  # fmt: skip
