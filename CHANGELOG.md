@@ -6,6 +6,21 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.28.0] - 2026-11-19
+### Added
+- `meydan.notify` (extra `notify`): notifications to the team's own devices over Web Push.
+  `subscribe`/`unsubscribe`, `enqueue` (in the transaction where the thing happened; one row per
+  device), `Pusher` (sends what is due; 404/410 forgets the device, 429/5xx/no answer waits and
+  gives up after `ATTEMPTS`, 400/413 never), `Keys` (VAPID). The message is the Declarative Web
+  Push shape. See `docs/notify.md`.
+- `meydan.notify.web`: `GET /key`, `POST`/`DELETE /subscriptions` (scope `notify:subscribe`;
+  the device is the person's, or whom a service acts for).
+- `Runtime(on_receive=[...])`: observers told of every new message in its transaction (before
+  interceptors), and `Routed.new_actor`: the message is how we met them.
+### Upgrading
+- New tables `<prefix>notify_subscriptions`, `<prefix>notifications`, `<prefix>notify_deliveries`
+  (autogenerate sees them).
+
 ## [0.27.0] - 2026-11-18
 ### Fixed
 - `operator`: a takeover now stops the agent's reply even when it lands while the agent is

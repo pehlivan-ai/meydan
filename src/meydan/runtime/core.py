@@ -42,6 +42,7 @@ from meydan.runtime.types import (
     Handler,
     Intercepted,
     Interceptor,
+    Observer,
     RuntimeConfig,
     Turn,
     _clock,
@@ -49,8 +50,8 @@ from meydan.runtime.types import (
 from meydan.runtime.worker import Worker, taken_over_now
 
 __all__ = [
-    "Channel", "FailureReply", "Handler", "Intercepted", "Interceptor", "Replied", "Runtime",
-    "RuntimeConfig", "Said", "Turn", "replied_to", "transcript",
+    "Channel", "FailureReply", "Handler", "Intercepted", "Interceptor", "Observer", "Replied",
+    "Runtime", "RuntimeConfig", "Said", "Turn", "replied_to", "transcript",
 ]  # fmt: skip
 from meydan.rules import DEFAULT, Rules
 
@@ -84,6 +85,7 @@ class Runtime:
         rules: "Rules | None" = None,
         intercept: Sequence[Interceptor] = (),
         expect: "Expectations | None" = None,
+        on_receive: Sequence[Observer] = (),
     ):
         self.engine = engine
         self.t = tables
@@ -98,6 +100,8 @@ class Runtime:
         # Answers to what we asked are matched before anything else sees them.
         self.expect = expect
         self.intercept = ([expect.intercept] if expect else []) + list(intercept)
+        # Told of every new message, in its transaction, before interceptors (a new person, say).
+        self.on_receive = list(on_receive)
         self.on_failure = on_failure  # the turn is given up
         self.on_delay = on_delay  # the turn is put off for the first time
         self.rules = rules or DEFAULT  # the channels' rules (`meydan.rules`)

@@ -93,6 +93,8 @@ class Receiver(_Part):
             inserted = conn.execute(stmt).all()  # rowcount is unreliable with ON CONFLICT
             new += len(inserted)
             if inserted:
+                for observe in self.on_receive:
+                    observe(conn, m, routed)
                 self._intercept(conn, m, routed, inserted[0][0])
         for s in statuses:
             self._apply_status(conn, s)
