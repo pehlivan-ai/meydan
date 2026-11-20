@@ -278,3 +278,128 @@ async def test_a_model_picks_an_attachment_by_its_type():
 
     result = await Agent(FunctionModel(model), output_type=Full).run("nerede?")
     assert [m.kind for m in result.output.outbound()] == ["location", "text"]
+
+
+# --- Declared from a table (.of) --------------------------------------------------------------
+
+import uuid  # noqa: E402
+
+from sqlalchemy import ForeignKey, create_engine  # noqa: E402
+from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column  # noqa: E402
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class Club(Base):
+    __tablename__ = "clubs"
+    slug: Mapped[str] = mapped_column(primary_key=True)
+    name: Mapped[str]
+    address: Mapped[str | None]
+    lat: Mapped[float | None]
+    lng: Mapped[float | None]
+    maps_url: Mapped[str | None]
+
+
+class Event(Base):
+    __tablename__ = "events"
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    name: Mapped[str]
+    poster: Mapped[str | None]
+    public: Mapped[bool] = mapped_column(default=True)
+
+
+class Card(Base):
+    __tablename__ = "cards"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    owner: Mapped[str]
+    purpose: Mapped[str]
+    name: Mapped[str]
+    phone: Mapped[str]
+    title: Mapped[str | None]
+    club: Mapped[str | None] = mapped_column(ForeignKey("clubs.slug"))
+
+
+Place_ = Location.of(
+    Club, by=Club.slug, field="venue", type="venue",
+    when="When they ask where it is.", describe="The venue's slug, from a tool result.",
+    lat=Club.lat, lng=Club.lng, name=Club.name, address=Club.address, url=Club.maps_url,
+)  # fmt: skip
+EventPoster = Image.of(
+    Event, by=Event.id, field="event", type="poster",
+    when="When they ask about an event.", describe="The event's id, from a tool result.",
+    media=Event.poster, alt="{name} poster", visible=lambda ctx, e: e.public,
+)  # fmt: skip
+SalesDesk = Contact.of(
+    Card, by=Card.purpose, type="desk", when="When they want to buy.",
+    describe="What it is about: 'sales'.", name=Card.name, phone=Card.phone, title=Card.title,
+    where={Card.owner: "platform"},
+)  # fmt: skip
+
+
+class Declared(Reply):
+    attachments: Attachments[Place_, EventPoster, SalesDesk] = Field(
+        default_factory=list, description="Sent after the bubbles, in this order."
+    )
+
+
+@pytest.fixture
+def session():
+    engine = create_engine("sqlite://")
+    Base.metadata.create_all(engine)
+    with Session(engine) as s:
+        yield s
+
+
+def test_declared_attachments_find_their_row_and_send_it(session):
+    shown = Event(name="Spring Cup", poster="k" * 64)
+    hidden = Event(name="Test Cup", poster="k" * 64, public=False)
+    session.add_all([
+        Club(slug="court", name="Court One", address="1 Main St", lat=41.0, lng=29.0,
+             maps_url="https://maps.example/c1"),
+        Club(slug="nowhere", name="No Pin"),
+        shown, hidden,
+        Card(owner="other", purpose="sales", name="Not Them", phone="+905550000009"),
+        Card(owner="platform", purpose="sales", name="Ada Kaya", phone="+905550000002",
+             title="Sales"),
+    ])  # fmt: skip
+    session.flush()
+    reply = Declared(attachments=[
+        {"type": "poster", "event": str(shown.id)},
+        {"type": "venue", "venue": "court"},
+        {"type": "desk", "purpose": "sales"},
+    ])  # fmt: skip
+    out = reply.outbound(session)
+    assert [m.kind for m in out] == ["image", "location", "text", "contact"]
+    assert out[0].text == "[image: Spring Cup poster]"
+    assert (out[1].place, out[2].text) == ("Court One", "https://maps.example/c1")
+    assert out[3].contact_name == "Ada Kaya"  # `where` picked the platform's card
+
+    nothing = Declared(attachments=[
+        {"type": "venue", "venue": "nowhere"},     # no coordinates
+        {"type": "venue", "venue": "made-up"},     # no such row
+        {"type": "poster", "event": str(hidden.id)},  # not visible
+    ])  # fmt: skip
+    assert nothing.outbound(session) == []
+    garbled = Declared(attachments=[{"type": "poster", "event": "not-a-uuid"}])
+    assert garbled.outbound(session) == []  # not a key at all
+
+
+def test_a_declared_type_reads_like_one_written_by_hand():
+    assert_described(Declared)
+    schema = Declared.model_json_schema()["$defs"]
+    venue = next(d for d in schema.values() if d["properties"]["type"].get("const") == "venue")
+    assert venue["description"] == "When they ask where it is."
+    assert venue["properties"]["venue"]["description"] == "The venue's slug, from a tool result."
+    assert "found by slug" in Place_.__doc__ and "lat=lat" in Place_.__doc__
+
+
+def test_columns_of_another_table_fail_when_the_type_is_made():
+    with pytest.raises(TypeError, match="lat=.* is not a column of Club"):
+        Location.of(Club, by=Club.slug, type="x", lat=Event.name, lng=Club.lng)
+
+
+def test_a_declared_type_needs_a_session_and_says_so():
+    with pytest.raises(TypeError, match="SQLAlchemy Session"):
+        Place_(venue="court").resolve(object())

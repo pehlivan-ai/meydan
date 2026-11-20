@@ -67,7 +67,60 @@ A map pin, a photo, a contact card, choices to tap. The model doesn't write the 
 image or the number: it **names a thing** (a venue's slug, an event's id, a purpose) and your
 code finds the real value. A made-up name then sends nothing, instead of a made-up address.
 
-Pick a primitive, name the thing, and say how to find it:
+Most of the time the thing is a row in one of your tables. Declare it, and meydan writes
+`resolve` (one SELECT through the session you pass as `ctx`):
+
+```python
+from meydan.reply import Attachments, Choices, Contact, Image, Location, Reply
+
+Venue = Location.of(
+    Club,
+    by=Club.slug,
+    field="venue",
+    type="location",
+    when="When they ask where it is or how to get there.",
+    describe="The venue's slug, from a tool result.",
+    lat=Club.lat,
+    lng=Club.lng,
+    name=Club.name,
+    address=Club.address,
+    url=Club.maps_url,
+)
+Poster = Image.of(
+    Event,
+    by=Event.id,
+    field="event",
+    type="poster",
+    when="When they ask about an event and haven't seen its poster yet.",
+    describe="The event's id, from a tool result.",
+    media=Event.poster,
+    alt="{name} poster",  # a template over the row's columns
+    visible=lambda ctx, event: can_see(ctx, event),  # False: nothing is sent
+)
+Desk = Contact.of(
+    Card,
+    by=Card.purpose,
+    type="desk",
+    when="When they want to talk to sales.",
+    describe="What it is about.",
+    name=Card.name,
+    phone=Card.phone,
+    title=Card.title,
+    where={Card.owner: "platform"},  # fixed filters
+)
+```
+
+- The model writes `field` (default: the `by` column's name); everything else comes from the
+  row. A missing row, a row without the parts it needs (coordinates, a media key, a phone), or
+  `visible(ctx, row)` False sends nothing.
+- A column of another table fails when the class is made, not at the first message.
+- What you get is an ordinary attachment class: its docstring says what maps to what, and
+  `assert_described` reads it like any other.
+- `ctx` is a SQLAlchemy `Session`, or anything with a `.session` (e.g. your own context with who
+  wrote, for `visible`).
+
+When it isn't one row (computed, drawn, from two places), subclass the primitive and write
+`resolve`:
 
 ```python
 from typing import Literal

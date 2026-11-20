@@ -6,6 +6,17 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.34.0] - 2026-11-20
+### Added
+- `Location.of(...)`, `Image.of(...)`, `Contact.of(...)`: an attachment declared from a table,
+  "find the row with this key, use these columns", without writing `resolve`. Columns,
+  `"{column}"` templates or callables for each part; `where` (fixed filters), `visible(ctx,
+  row)`; `field` (what the model writes, default the key column's name). One SELECT through the
+  Session in `ctx`. Columns of another table fail when the class is made. Needs SQLAlchemy. See
+  docs/reply.md#attachments-what-goes-after-the-bubbles.
+### Upgrading
+- Nothing to migrate.
+
 ## [0.33.0] - 2026-11-20
 ### Added
 - Reply attachments: what goes after the bubbles (a map pin, a photo, a contact card, choices).
