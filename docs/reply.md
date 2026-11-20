@@ -46,31 +46,77 @@ With Pydantic AI, a refused reply uses the agent's output retries (one by defaul
 `Agent(..., retries=3)` for more). When they run out the turn fails, and nothing half-shaped is
 sent.
 
-## Your own numbers, your own fields
+## Your own numbers
 
-Subclass `Reply`:
+Subclass `Reply` and set `style`:
 
 ```python
 from meydan.reply import Reply, ReplyStyle
 
 
 class DeskReply(Reply):
-    style = ReplyStyle(max_bubbles=2, max_chars=300)
-    # Anything that is not text is its own field and names a thing; code looks it up. A made-up
-    # name then sends nothing, instead of a made-up address.
-    pin: str | None = None
-
-
-async def reply(turn: Turn) -> list[Outbound]:
-    out = (await agent.run(turn.text, ...)).output
-    messages = out.outbound()
-    if out.pin and (place := places.get(out.pin)):
-        messages.append(Outbound.location_message(place.lat, place.lng, place=place.name))
-    return messages
+    style = ReplyStyle(max_bubbles=2, max_chars=300, max_attachments=2)
 ```
 
 To describe `bubbles` to the model in your own words, declare the field again in the subclass
 with your own `Field(description=...)`.
+
+## Attachments: what goes after the bubbles
+
+A map pin, a photo, a contact card, choices to tap. The model doesn't write the address, the
+image or the number: it **names a thing** (a venue's slug, an event's id, a purpose) and your
+code finds the real value. A made-up name then sends nothing, instead of a made-up address.
+
+Pick a primitive, name the thing, and say how to find it:
+
+```python
+from typing import Literal
+
+from pydantic import Field
+
+from meydan.reply import Attachments, Choices, Location, Place, Reply
+
+
+class Venue(Location):
+    type: Literal["location"] = "location"
+    when = "When they ask where it is or how to get there."
+    venue: str = Field(description="The venue's slug, from a tool result.")
+
+    def resolve(self, ctx) -> Place | None:
+        v = venues.get(ctx.session, self.venue)
+        return Place(v.lat, v.lng, v.name, v.address, url=v.maps_url) if v else None
+
+
+class DeskReply(Reply):
+    attachments: Attachments[Venue, Choices] = Field(
+        default_factory=list, description="Sent after the bubbles, in this order."
+    )
+
+
+messages = result.output.outbound(ctx)  # bubbles, then each attachment's messages
+```
+
+| Primitive | `resolve` returns | Sends |
+| --- | --- | --- |
+| `Location` | `Place(lat, lng, name, address, url)` | a map pin, and `url` right after it if set |
+| `Image` | `ImageRef(media, alt, caption)` (a key from `meydan.media.put`) | a photo |
+| `Contact` | `Person(name, phone, title, org)` | a contact card |
+| `Choices` | nothing to resolve: the model writes the question and the options | buttons or a list |
+
+- Each type has a fixed `type` (a `Literal`): the schema tells them apart by it.
+- **What the model reads decides when it reaches for one.** `when` becomes the type's
+  description in the schema (the docstring stays yours); every field the model fills gets a
+  `description`. Not enforced: put `assert_described(DeskReply)` in your tests and it lists
+  whatever the model would read without a word.
+- A reply may be attachments alone, or bubbles alone, never nothing; at most
+  `style.max_attachments` (3).
+- `ctx` is yours (a database session, who wrote): `outbound(ctx)` hands it to each attachment.
+- One that resolves to `None`, or raises, is left out and logged (its type only); the rest go.
+- `Choices` needs no code; subclass it to set `label` (the button that opens a list) in your
+  language, or to fix the question and options. Option titles are at most 24 characters in the
+  schema, so the model is told before WhatsApp would refuse.
+- Something no primitive fits: subclass `Attachment` and write `to_outbound(ctx)` yourself.
+- A reply class without `attachments` of its own shows the model no attachments at all.
 
 ## Choices
 
