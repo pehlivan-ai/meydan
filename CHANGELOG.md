@@ -6,6 +6,26 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.33.0] - 2026-11-20
+### Added
+- Reply attachments: what goes after the bubbles (a map pin, a photo, a contact card, choices).
+  `attachments: Attachments[...]` in a `Reply` subclass; primitives `Location`, `Image`,
+  `Contact` (implement `resolve`, return `Place` / `ImageRef` / `Person`) and `Choices` (ready;
+  the model writes it). The model names a thing, code finds the value. Types are told apart by a
+  fixed `type`; `when` is a type's description in the schema. `reply.outbound(ctx)` sends the
+  bubbles, then each attachment in the model's order; one that resolves to nothing or fails is
+  left out and logged. A reply may be attachments alone; `ReplyStyle.max_attachments` (3).
+  See docs/reply.md#attachments-what-goes-after-the-bubbles.
+- `assert_described(ReplyClass)` / `undescribed(...)`: for your tests, every field and
+  attachment type the model would read without a description.
+### Changed
+- `Reply.bubbles` may be empty when the reply carries attachments (the schema's `minItems` is 0
+  then). A reply class without attachments of its own is unchanged and shows none to the model.
+- `ReplyStyle.problems(bubbles, attachments=None)`.
+### Upgrading
+- Nothing to migrate. Fields your `Reply` subclass added for a pin or a photo can become
+  attachment types.
+
 ## [0.32.0] - 2026-11-20
 ### Added
 - `meydan.media`: files we send, kept once by their SHA-256 (`media.put`, `media.load`). Where the

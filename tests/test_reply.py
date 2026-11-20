@@ -109,3 +109,172 @@ async def test_an_agent_is_told_what_was_wrong_and_writes_the_reply_again():
     _, told = seen
     assert "'#' heading" in told and "ends with ':'" in told
     assert schemas[0]["properties"]["bubbles"]["maxItems"] == 3
+
+
+# --- Attachments ------------------------------------------------------------------------------
+
+from typing import Literal  # noqa: E402
+
+from pydantic import Field  # noqa: E402
+
+from meydan.reply import (  # noqa: E402
+    Attachments,
+    Choices,
+    Contact,
+    Image,
+    ImageRef,
+    Location,
+    Person,
+    Place,
+    assert_described,
+    undescribed,
+)
+
+PLACES = {"court": Place(41.0, 29.0, "Court One", "1 Main St", url="https://maps.example/c1")}
+
+
+class Venue(Location):
+    type: Literal["location"] = "location"
+    when = "When they ask where it is or how to get there."
+    venue: str = Field(description="The venue's slug, from a tool result.")
+
+    def resolve(self, ctx):
+        return PLACES.get(self.venue)
+
+
+class Poster(Image):
+    type: Literal["poster"] = "poster"
+    when = "When they ask about an event and haven't seen its poster yet."
+    event: str = Field(description="The event's id, from a tool result.")
+
+    def resolve(self, ctx):
+        return ImageRef("k" * 64, alt=f"{self.event} poster") if self.event == "spring" else None
+
+
+class Desk(Contact):
+    type: Literal["desk"] = "desk"
+    when = "When they want to talk to a person."
+    purpose: str = Field(description="What they want to talk about: 'sales'.")
+
+    def resolve(self, ctx):
+        return Person("Ada Kaya", "+905550000002", title="Sales") if ctx == "ok" else None
+
+
+class Broken(Location):
+    type: Literal["broken"] = "broken"
+    when = "Never."
+
+    def resolve(self, ctx):
+        raise RuntimeError("database down")
+
+
+class Turkish(Choices):
+    label = "Seç"
+
+
+class Full(Reply):
+    attachments: Attachments[Venue, Poster, Desk, Turkish, Broken] = Field(
+        default_factory=list, description="Sent after the bubbles, in this order."
+    )
+
+
+def test_attachments_go_after_the_bubbles_in_the_models_order():
+    reply = Full(
+        bubbles=["Burası."],
+        attachments=[
+            {"type": "poster", "event": "spring"},
+            {"type": "location", "venue": "court"},
+            {"type": "desk", "purpose": "sales"},
+        ],
+    )
+    out = reply.outbound("ok")
+    assert [m.kind for m in out] == ["text", "image", "location", "text", "contact"]
+    assert out[1].text == "[image: spring poster]"
+    assert (out[2].lat, out[2].place, out[3].text) == (41.0, "Court One", "https://maps.example/c1")
+    assert (out[4].contact_name, out[4].contact_phone) == ("Ada Kaya", "+905550000002")
+
+
+def test_a_reply_can_be_attachments_alone_but_not_nothing():
+    assert [
+        m.kind for m in Full(attachments=[{"type": "location", "venue": "court"}]).outbound()
+    ] == [
+        "location",
+        "text",
+    ]
+    with pytest.raises(ValidationError, match="at least one bubble with text, or an attachment"):
+        Full()
+    with pytest.raises(ValidationError, match="at least one bubble with text\\."):
+        Reply()  # a reply that carries no attachments says so without them
+    with pytest.raises(ValidationError, match="4 attachments; at most 3"):
+        Full(attachments=[{"type": "location", "venue": "court"}] * 4)
+
+
+def test_one_that_resolves_to_nothing_or_fails_is_left_out_and_the_rest_go(caplog):
+    reply = Full(
+        bubbles=["Bak."],
+        attachments=[
+            {"type": "location", "venue": "made-up"},
+            {"type": "broken"},
+            {"type": "poster", "event": "spring"},
+        ],
+    )
+    assert [m.kind for m in reply.outbound()] == ["text", "image"]
+    assert "location resolved to nothing" in caplog.text and "broken failed" in caplog.text
+    assert "made-up" not in caplog.text  # the type only, never what the model wrote
+
+
+def test_choices_are_buttons_or_a_list_and_text_when_they_cant_be():
+    two = Full(attachments=[{"type": "choices", "question": "Onay?", "options": [
+        {"title": "Evet"}, {"title": "Düzelt"}]}])  # fmt: skip
+    [m] = two.outbound()
+    assert m.kind == "choices" and m.choices_label == "Seç"
+    assert [c.title for c in m.choices] == ["Evet", "Düzelt"]
+    same = Full(attachments=[{"type": "choices", "question": "Hangisi?", "options": [
+        {"title": "A"}, {"title": "a"}]}])  # fmt: skip
+    [m] = same.outbound()
+    assert m.kind == "text" and m.text == "Hangisi?\n• A\n• a"
+    with pytest.raises(ValidationError):  # WhatsApp's own limits are in the schema
+        Full(attachments=[{"type": "choices", "question": "Q", "options": [{"title": "x" * 25}]}])
+
+
+def test_the_schema_tells_attachments_apart_by_type_and_says_when_to_use_each():
+    schema = Full.model_json_schema()
+    items = schema["properties"]["attachments"]
+    assert items["maxItems"] == 3 and items["items"]["discriminator"]["propertyName"] == "type"
+    assert schema["$defs"]["Venue"]["description"] == Venue.when  # `when`, not the docstring
+    assert schema["$defs"]["Venue"]["properties"]["venue"]["description"].startswith("The venue")
+    assert schema["properties"]["bubbles"]["minItems"] == 0
+    assert "attachments" not in Reply.model_json_schema()["properties"]  # only once you add some
+
+
+def test_assert_described_names_what_the_model_would_read_without_a_word():
+    assert_described(Full)
+
+    class Bare(Location):
+        type: Literal["bare"] = "bare"
+        venue: str
+
+    class Loose(Reply):
+        attachments: Attachments[Bare] = Field(default_factory=list)
+        pin: str | None = None
+
+    found = undescribed(Loose)
+    assert any("Loose.attachments has no description" in f for f in found)
+    assert any("Loose.pin has no description" in f for f in found)
+    assert any("Bare has no `when`" in f for f in found)
+    assert any("Bare.venue has no description" in f for f in found)
+    with pytest.raises(AssertionError, match="Bare.venue"):
+        assert_described(Loose)
+
+
+async def test_a_model_picks_an_attachment_by_its_type():
+    def model(messages, info: AgentInfo) -> ModelResponse:
+        [output] = info.output_tools
+        return ModelResponse(
+            parts=[
+                ToolCallPart(output.name, {"attachments": [{"type": "location", "venue": "court"}]})
+            ]
+        )
+
+    result = await Agent(FunctionModel(model), output_type=Full).run("nerede?")
+    assert [m.kind for m in result.output.outbound()] == ["location", "text"]
