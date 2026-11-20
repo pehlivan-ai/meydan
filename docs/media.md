@@ -7,7 +7,7 @@ from meydan import media
 from meydan.channels import Outbound
 
 with runtime.engine.begin() as conn:
-    key = media.put(conn, tables, jpeg_bytes, "image/jpeg")   # SHA-256 of the bytes, hex
+    key = media.put(conn, tables, jpeg_bytes, "image/jpeg")  # SHA-256 of the bytes, hex
 
 Outbound.image_message(key, caption=None, alt="Spring Cup poster")
 ```
