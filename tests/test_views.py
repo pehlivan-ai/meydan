@@ -243,3 +243,73 @@ async def test_a_template_shows_what_it_said_and_a_code_never_shows(world):
         ("reminder", "Your Mini lesson is at 18:00. Coming?", ["Yes", "No"]),
         ("signin", None, []),  # a code is never shown, not even its template's words
     ]
+
+
+async def test_each_line_shows_its_parts_as_the_person_saw_them(world):
+    from sqlalchemy import update
+
+    from meydan import media
+    from meydan.channels.base import Address, Choice, Inbound
+
+    rt, anna, bora = world
+    conv = read(rt, query.conversations, who(anna))[0].id
+    with rt.engine.begin() as c:
+        key = media.put(c, rt.t, b"\x89PNG poster", "image/png")
+        rt.enqueue(c, channel="whatsapp", conversation_id=conv, from_number="15550000000",
+                   to=ANNA, messages=[
+            Outbound.image_message(key, alt="Spring Cup poster"),
+            Outbound.location_message(41.0, 29.0, place="Court One", address="1 Main St"),
+            Outbound.choices_message("Which one?", [Choice("a", "Spring Cup"),
+                                                   Choice("b", "Autumn Cup")], label="Pick"),
+            Outbound.contact_message("Ada Kaya", "+15550009999", title="Sales"),
+        ])  # fmt: skip
+        o = rt.t.outbox
+        c.execute(update(o).where(o.c.message["kind"].astext == "choices")
+                  .values(channel_message_id="wamid.ASK"))  # fmt: skip
+    pressed = {"type": "button_reply", "button_reply": {"id": "a", "title": "Spring Cup"}}
+    tap = Inbound(
+        "whatsapp", "wamid.TAP", Address("wa-pnid", "222"), Address("tel", ANNA), T0,
+        "interactive", "Spring Cup", {"interactive": pressed}, reply_to="wamid.ASK",
+    )  # fmt: skip
+    receive(rt, [tap])
+
+    lines = read(rt, query.conversation, who(anna), conv).lines
+    by_kind = {ln.kind: ln for ln in lines}
+    image = by_kind["image"]
+    assert (image.image.media, image.image.alt, image.text) == (key, "Spring Cup poster", None)
+    pin = by_kind["location"]
+    assert (pin.location.lat, pin.location.name, pin.text) == (41.0, "Court One", None)
+    ask = by_kind["choices"]
+    assert [o.title for o in ask.choices.options] == ["Spring Cup", "Autumn Cup"]
+    assert (ask.choices.question, ask.choices.style, ask.choices.label) == (
+        "Which one?", "buttons", "Pick")  # fmt: skip
+    card = by_kind["contact"]
+    assert (card.contact.name, card.contact.phone, card.contact.title) == (
+        "Ada Kaya", "+15550009999", "Sales")  # fmt: skip
+    answer = by_kind["interactive"]
+    assert answer.tapped and answer.reply_to == ask.id and answer.text == "Spring Cup"
+
+    hidden = read(rt, query.conversation, who(bora, "ops"), conv)  # may not read others' messages
+    if hidden is not None:
+        assert all(
+            ln.image is ln.location is ln.choices is ln.contact is None for ln in hidden.lines
+        )
+
+
+async def test_a_file_we_sent_is_shown_like_its_conversation(world):
+    from meydan import media
+
+    rt, anna, bora = world
+    conv = read(rt, query.conversations, who(anna))[0].id
+    with rt.engine.begin() as c:
+        key = media.put(c, rt.t, b"\x89PNG poster", "image/png")
+        rt.enqueue(c, channel="whatsapp", conversation_id=conv, from_number="15550000000",
+                   to=ANNA, messages=[Outbound.image_message(key)])  # fmt: skip
+    assert read(rt, query.media, who(anna), key) == (b"\x89PNG poster", "image/png")  # hers
+    assert read(rt, query.media, who(bora), key) is None  # not his conversation
+    reader = who(bora, "messages:read")  # may read others' messages: shown, and audited
+    assert read(rt, query.media, reader, key)[0] == b"\x89PNG poster"
+    with rt.engine.connect() as c:
+        actions = c.execute(select(rt.t.audit.c.action)).scalars().all()
+    assert "read:media" in actions
+    assert read(rt, query.media, who(anna), "0" * 64) is None  # no such file

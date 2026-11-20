@@ -5,6 +5,18 @@ versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor 
 tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
+
+## [0.35.0] - 2026-11-20
+### Added
+- Observe: each `Line` of a conversation has its `kind` and its parts, as the person saw them:
+  `image` (media key, alt, caption), `location`, `choices` (question, options, buttons or list),
+  `contact`. A message from the person says whether they `tapped` an option and which line of
+  ours it answers (`reply_to`). The parts are hidden with the text.
+- `GET /observe/media/{key}` (`query.media`): a file we sent, to a person who sees a conversation
+  that it went out in; reads of others' conversations are audited (`read:media`).
+  `observe.web.routes(..., media_store=)`.
+### Upgrading
+- Nothing to migrate.
 ### Docs
 - README rewritten in plain technical English (ASD-STE100 style: short sentences, one term per
   concept, no filler). Every module and its doc in one table, recipes as links. The version is

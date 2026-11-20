@@ -268,6 +268,74 @@ def _said(message: dict, words: dict) -> dict:
     return {"text": text, "template": name, "buttons": list(buttons)}
 
 
+def _parts(message: dict, channel: str) -> dict:
+    """The parts of a message we sent, as the person saw them."""
+    kind = message.get("kind") or "text"
+    out: dict = {"kind": kind}
+    if kind == "image":
+        out["image"] = ImagePart(
+            media=message.get("media"), caption=message.get("caption"), alt=_alt(message)
+        )
+        out["text"] = message.get("caption")
+    elif kind == "location" and message.get("lat") is not None:
+        out["location"] = LocationPart(
+            lat=message["lat"], lng=message["lng"], name=message.get("place"),
+            address=message.get("address"),
+        )  # fmt: skip
+        out["text"] = None
+    elif kind == "choices":
+        options = [
+            ChoiceOption(title=c["title"], description=c.get("description"))
+            for c in message.get("choices") or []
+        ]
+        out["choices"] = ChoicesPart(
+            question=message.get("body") or "", options=options,
+            style=_choice_style(message, channel), label=message.get("choices_label"),
+        )  # fmt: skip
+        out["text"] = message.get("body")
+    elif kind == "contact":
+        out["contact"] = ContactPart(
+            name=message.get("contact_name") or "", phone=message.get("contact_phone"),
+            title=message.get("contact_title"), org=message.get("contact_org"),
+        )  # fmt: skip
+        out["text"] = None
+    return out
+
+
+def _alt(message: dict) -> str | None:
+    text = message.get("text") or ""
+    if text.startswith("[image: ") and "]" in text:
+        return text[len("[image: ") : text.index("]")]
+    return None
+
+
+def _choice_style(message: dict, channel: str) -> str | None:
+    if channel != "whatsapp":
+        return None
+    from meydan.channels.base import Outbound
+    from meydan.channels.whatsapp import choice_style
+
+    try:
+        return choice_style(Outbound.from_payload(message))
+    except (ValueError, TypeError):
+        return None
+
+
+def _theirs(kind: str, payload: dict | None) -> dict:
+    """The parts of a message someone sent us, from the channel's payload."""
+    out: dict = {"kind": kind, "tapped": kind in ("interactive", "button")}
+    loc = (payload or {}).get("location") if kind == "location" else None
+    if loc and loc.get("latitude") is not None:
+        out["location"] = LocationPart(
+            lat=float(loc["latitude"]), lng=float(loc["longitude"]), name=loc.get("name"),
+            address=loc.get("address"),
+        )  # fmt: skip
+    if kind == "image":
+        out["image"] = ImagePart(media=None, caption=((payload or {}).get("image") or {}).get(
+            "caption"))  # fmt: skip
+    return out
+
+
 def _delivery(r) -> str:
     if r.read_at is not None:
         return "read"
@@ -327,7 +395,77 @@ def _with_last_messages(
     return out
 
 
+# --- a file we sent ---------------------------------------------------------------------------
+
+
+def media(
+    conn: Connection,
+    t: RuntimeTables,
+    who: Principal,
+    key: str,
+    *,
+    visibility: Visibility = NEED_TO_KNOW,
+    store=None,
+) -> tuple[bytes, str] | None:
+    """A file we sent (an image), for a screen that shows the conversation: its bytes and type.
+    Shown like the messages it went out in: to someone in one of those conversations, or to
+    someone who may read others' messages (audited). None when there is no such file or the
+    person may not see it."""
+    from meydan import media as files
+
+    o = t.outbox
+    convs = {
+        r.conversation_id
+        for r in conn.execute(
+            select(o.c.conversation_id).where(o.c.message["media"].astext == key).distinct()
+        )
+    }
+    if not convs:
+        return None
+    own = {r.conversation_id for r in conn.execute(_own_conversations(t, who.actor_id))}
+    if not convs & own:
+        if not visibility.sees(who, "message_text"):
+            return None
+        _audit(conn, t, who, visibility.message_text, "read:media")
+    try:
+        return files.load(conn, t, key, store=store)
+    except files.MediaMissingError:
+        return None
+
+
 # --- one conversation ------------------------------------------------------------------------
+
+
+class ImagePart(BaseModel):
+    media: str | None  # the file's key in meydan.media (GET /observe/media/{key}); None: not ours
+    alt: str | None = None
+    caption: str | None = None
+
+
+class LocationPart(BaseModel):
+    lat: float
+    lng: float
+    name: str | None = None
+    address: str | None = None
+
+
+class ChoiceOption(BaseModel):
+    title: str
+    description: str | None = None
+
+
+class ChoicesPart(BaseModel):
+    question: str
+    options: list[ChoiceOption]
+    style: str | None = None  # "buttons" | "list" as the channel shows them; None: unknown
+    label: str | None = None  # the button that opens a list
+
+
+class ContactPart(BaseModel):
+    name: str
+    phone: str | None = None
+    title: str | None = None
+    org: str | None = None
 
 
 class Line(BaseModel):
@@ -349,6 +487,17 @@ class Line(BaseModel):
     buttons: list[str] = []
     # A one-time code (an authentication template): never shown, only that it was sent.
     code: bool = False
+    # What kind of message it was, and its parts as the person saw them (with `text`, hidden
+    # together). Ours: text | template | image | location | choices | contact. Theirs: the
+    # channel's kind (text, interactive, button, image, location, ...).
+    kind: str = "text"
+    image: ImagePart | None = None
+    location: LocationPart | None = None
+    choices: ChoicesPart | None = None
+    contact: ContactPart | None = None
+    # Theirs: the message of ours it answers ("out:<id>"), and whether they tapped an option.
+    reply_to: str | None = None
+    tapped: bool = False
 
 
 class TurnView(BaseModel):
@@ -402,7 +551,9 @@ def conversation(
     show_costs = visibility.sees(who, "costs")
 
     ins = conn.execute(
-        select(i.c.id, i.c.received_at, i.c.text, i.c.processed_at)
+        select(
+            i.c.id, i.c.received_at, i.c.text, i.c.processed_at, i.c.kind, i.c.payload, i.c.reply_to
+        )  # fmt: skip
         .where(i.c.conversation_id == conversation_id)
         .order_by(i.c.received_at.desc())
         .limit(limit)
@@ -418,14 +569,17 @@ def conversation(
             o.c.status,
             o.c.delivered_at,
             o.c.read_at,
+            o.c.channel_message_id,
         )
         .where(o.c.conversation_id == conversation_id)
         .order_by(o.c.created_at.desc())
         .limit(limit)
     ).all()
+    ours = {r.channel_message_id: f"out:{r.id}" for r in outs if r.channel_message_id}
     lines = [
         Line(id=f"in:{r.id}", at=r.received_at, direction="in", text=r.text, turn_id=None,
-             author="person")
+             author="person", reply_to=ours.get(r.reply_to) if r.reply_to else None,
+             **_theirs(r.kind, r.payload))
         for r in ins
     ]  # fmt: skip
     words = _template_words(conn, t, head.channel, outs)
@@ -438,13 +592,14 @@ def conversation(
             author=r.author,
             author_id=r.author_actor_id,
             status=_delivery(r),
-            **_said(r.message or {}, words),
+            **(_said(r.message or {}, words) | _parts(r.message or {}, head.channel)),
         )
         for r in outs
     ]
     lines.sort(key=lambda line: line.at)
-    if not show_text:
-        lines = [line.model_copy(update={"text": None}) for line in lines]
+    if not show_text:  # the parts carry what was said, so they go with the text
+        hidden = {"text": None, "image": None, "location": None, "choices": None, "contact": None}
+        lines = [line.model_copy(update=hidden) for line in lines]
 
     # Per turn: the inbound messages it answered (processed when the turn finished) and its sends.
     first_sent = select(func.min(o.c.sent_at)).where(o.c.turn_id == tu.c.id).scalar_subquery()

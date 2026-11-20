@@ -58,6 +58,30 @@ from meydan.observe.web import routes as observe_routes
 app.include_router(observe_routes(auth, visibility), prefix="/observe")  # 401 / 403 / 404
 ```
 
+### A conversation as the person saw it
+
+`query.conversation` gives each message as a `Line`. A line has the message's `kind` and its
+parts, so a screen can show the message as it looked on the phone, not as text:
+
+| Kind (ours) | Part on the line | Shown as |
+|---|---|---|
+| `text` | `text` | a bubble |
+| `template` | `template`, `text` (the body filled in), `buttons` | a bubble with its buttons |
+| `image` | `image` (`media`, `alt`, `caption`) | the photo: `GET /observe/media/{media}` |
+| `location` | `location` (`lat`, `lng`, `name`, `address`) | a map pin |
+| `choices` | `choices` (`question`, `options`, `style`: `buttons` or `list`, `label`) | the question with its buttons, or a list |
+| `contact` | `contact` (`name`, `phone`, `title`, `org`) | a contact card |
+
+A message from the person has the channel's kind (`text`, `interactive`, `button`, `location`,
+`image`, ...). `tapped` is true when they tapped an option. `reply_to` is the id of our line that
+they answered (`out:<id>`).
+
+- The parts go with the text: a person who may not read the text sees no parts either. The kind
+  stays visible.
+- `GET /observe/media/{key}` gives a file we sent, to a person who sees one of the conversations
+  that it went out in. A read of someone else's conversation is audited (`read:media`). Pass
+  `media_store` to `routes(...)` when the files are not in Postgres.
+
 ### Following a message we sent (since v0.11)
 Give the message a key of your own when you send it, and every later fact about it is found by
 that key, with no table of your own to keep in step:

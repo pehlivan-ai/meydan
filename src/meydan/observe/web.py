@@ -9,7 +9,7 @@ Every endpoint needs a signed-in principal; scopes are enforced by the read mode
 import uuid
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 
 from meydan.auth.core import Principal
 from meydan.auth.web import Auth
@@ -28,8 +28,9 @@ from meydan.observe.query import (
 from meydan.visibility import Visibility
 
 
-def routes(auth: Auth, visibility: Visibility = NEED_TO_KNOW) -> APIRouter:
-    """The read models over HTTP, showing what `visibility` allows each person."""
+def routes(auth: Auth, visibility: Visibility = NEED_TO_KNOW, media_store=None) -> APIRouter:
+    """The read models over HTTP, showing what `visibility` allows each person. `media_store`:
+    where the bytes of the files we send live (meydan.media; Postgres unless given)."""
     router = APIRouter(tags=["observe"])
     signed_in = Annotated[Principal, Depends(auth.signed_in)]
 
@@ -61,6 +62,15 @@ def routes(auth: Auth, visibility: Visibility = NEED_TO_KNOW) -> APIRouter:
         if found is None:
             raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found.")
         return found
+
+    @router.get("/media/{key}", response_class=Response)
+    def media(person: signed_in, key: str) -> Response:
+        """A file we sent (an image), shown as the conversation it went out in is shown."""
+        found = read(query.media, person, key, store=media_store)
+        if found is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found.")
+        data, mime = found
+        return Response(data, media_type=mime, headers={"Cache-Control": "private, max-age=3600"})
 
     @router.get("/costs")
     def costs(person: signed_in, days: Annotated[int, Query(ge=1, le=366)] = 30) -> CostReport:

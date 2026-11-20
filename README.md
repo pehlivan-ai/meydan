@@ -157,7 +157,7 @@ are in Postgres, so the app needs no message broker and no cache.
 meydan is a pinned git dependency. Use the latest tag (see the version badge above):
 
 ```
-uv add "meydan[llm,runtime,api,access] @ git+https://github.com/pehlivan-ai/meydan@v0.34.0"
+uv add "meydan[llm,runtime,api,access] @ git+https://github.com/pehlivan-ai/meydan@v0.35.0"
 ```
 
 To change meydan and your app together, clone meydan next to your app:
