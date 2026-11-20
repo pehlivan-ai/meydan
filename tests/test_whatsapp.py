@@ -387,3 +387,31 @@ async def test_send_a_contact_card_people_can_message_or_save():
             Outbound.contact_message("Ada", phone)
     with pytest.raises(ValueError):
         Outbound.contact_message(" ", "+905550000002")
+
+
+async def test_upload_a_file_then_send_the_image_by_id():
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        if request.url.path.endswith("/media"):
+            return httpx.Response(200, json={"id": "4490709327384033"})
+        return httpx.Response(200, json={"messages": [{"id": "wamid.I"}]})
+
+    wa = cloud(handler)
+    assert await wa.upload("222", b"\xff\xd8jpeg", "image/jpeg") == "4490709327384033"
+    up = seen[0]
+    assert up.url.path.endswith("/222/media")
+    assert up.headers["content-type"].startswith("multipart/form-data")
+    assert b'name="messaging_product"' in up.content and b"image/jpeg" in up.content
+
+    from dataclasses import replace
+
+    image = replace(Outbound.image_message("k" * 64, caption="Hi"), channel_media_id="4490")
+    assert await wa.send("222", "905550000001", image) == "wamid.I"
+    body = json.loads(seen[1].content)
+    assert body["type"] == "image" and body["image"] == {"id": "4490", "caption": "Hi"}
+    with pytest.raises(SendError):  # never uploaded: nothing to send
+        await wa.send("222", "905550000001", Outbound.image_message("k" * 64))
+    assert Outbound.from_payload(image.to_payload()) == image  # the id isn't part of the row
+    assert "channel_media_id" not in image.to_payload()

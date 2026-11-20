@@ -31,6 +31,7 @@ from meydan.channels.base import Inbound, Outbound, StatusUpdate, TemplateUpdate
 from meydan.runtime.conversation import Said, transcript
 
 if TYPE_CHECKING:
+    from meydan.media import MediaStore
     from meydan.runtime.expect import Expectations
 from meydan.runtime.inbound import Receiver, Replied, replied_to
 from meydan.runtime.outbound import Outbox, backoff
@@ -86,6 +87,7 @@ class Runtime:
         intercept: Sequence[Interceptor] = (),
         expect: "Expectations | None" = None,
         on_receive: Sequence[Observer] = (),
+        media_store: "MediaStore | None" = None,
     ):
         self.engine = engine
         self.t = tables
@@ -102,6 +104,10 @@ class Runtime:
         self.intercept = ([expect.intercept] if expect else []) + list(intercept)
         # Told of every new message, in its transaction, before interceptors (a new person, say).
         self.on_receive = list(on_receive)
+        # Where the bytes of the files we send live (meydan.media); Postgres unless given.
+        from meydan.media import PostgresStore
+
+        self.media_store = media_store or PostgresStore(tables)
         self.on_failure = on_failure  # the turn is given up
         self.on_delay = on_delay  # the turn is put off for the first time
         self.rules = rules or DEFAULT  # the channels' rules (`meydan.rules`)

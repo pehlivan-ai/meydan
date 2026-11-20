@@ -171,7 +171,8 @@ A reply is a list of bubbles: `Outbound.text_message`, `Outbound.template_messag
 24 h window), `Outbound.location_message(lat, lng, place=, address=)` (a map pin) or
 `Outbound.choices_message(question, [Choice(id, title, description)], label=)` (options to tap;
 [docs/reply.md](docs/reply.md#choices)) or `Outbound.contact_message(name, phone, org=, title=)` (a
-contact card).
+contact card) or `Outbound.image_message(key)` (an image kept with `meydan.media.put`;
+[docs/media.md](docs/media.md)).
 
 For an agent that talks to people, let the model write the bubbles: `meydan.reply.Reply` as the
 agent's output type, then `result.output.outbound()` ([docs/reply.md](docs/reply.md)).

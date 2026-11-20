@@ -159,6 +159,14 @@ class Telegram:
                 from_number, "sendLocation", chat_id=chat, latitude=message.lat,
                 longitude=message.lng,
             )  # fmt: skip
+        elif message.kind == "image":
+            if message.media_bytes is None:  # the sender attaches the file (meydan.media)
+                raise SendError("image: no file attached", retryable=False)
+            sent = await self.call_with_file(
+                from_number, "sendPhoto", "photo", message.media_bytes,
+                message.media_mime or "image/jpeg", chat_id=chat,
+                **({"caption": message.caption} if message.caption else {}),
+            )  # fmt: skip
         elif message.kind == "contact":
             first, _, last = (message.contact_name or "").partition(" ")
             sent = await self.call(
@@ -205,6 +213,30 @@ class Telegram:
                 from_number, "sendMessage", chat_id=chat, **self._text(message.text)
             )
         return f"{from_number}:{chat}:{sent['message_id']}"
+
+    async def call_with_file(
+        self, bot: str, method: str, field: str, data: bytes, mime: str, **params: Any
+    ) -> Any:
+        """A Bot API method that takes a file (multipart), e.g. sendPhoto."""
+        token = self._tokens.get(bot)
+        if token is None:
+            raise SendError(f"no token for bot {bot}", retryable=False)
+        try:
+            r = await self._client.post(
+                f"{API}/bot{token}/{method}",
+                data={k: str(v) for k, v in params.items()},
+                files={field: ("file", data, mime)},
+            )
+        except httpx.HTTPError as e:
+            raise SendError(f"{method}: {type(e).__name__}", retryable=True) from None
+        data_ = r.json() if r.content else {}
+        if r.status_code == 200 and data_.get("ok"):
+            return data_["result"]
+        raise SendError(
+            f"{method}: {data_.get('description') or r.status_code}",
+            retryable=r.status_code == 429 or r.status_code >= 500,
+            code=r.status_code,
+        )
 
     def _text(self, text: str) -> dict[str, Any]:
         if self._markup == "whatsapp":

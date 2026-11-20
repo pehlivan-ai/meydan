@@ -437,6 +437,30 @@ class WhatsAppCloud:
             raise SendError(reason, retryable=True, code=code)
         raise SendError(reason, retryable=False, code=code)
 
+    async def upload(self, from_number: str, data: bytes, mime: str) -> str:
+        """Give WhatsApp a file to send from this number; returns its media id. Meta keeps it
+        30 days, and only this number can send it (Cloud API "Media": upload media)."""
+        url = f"{GRAPH}/{self._version}/{from_number}/media"
+        try:
+            r = await self._client.post(
+                url,
+                data={"messaging_product": "whatsapp", "type": mime},
+                files={"file": ("file", data, mime)},
+                headers={"Authorization": f"Bearer {self._token}"},
+            )
+        except (httpx.TimeoutException, httpx.NetworkError) as e:
+            raise SendError(f"upload network: {type(e).__name__}", retryable=True) from e
+        if r.status_code < 300:
+            return str(r.json()["id"])
+        try:
+            err = r.json().get("error", {})
+        except ValueError:
+            err = {}
+        code = err.get("code")
+        reason = f"upload {r.status_code} {code}: {err.get('message', r.text[:200])}"
+        retry = code in RETRYABLE_CODES or r.status_code == 429 or r.status_code >= 500
+        raise SendError(reason, retryable=retry, code=code)
+
     async def list_templates(self, account: str) -> list[TemplateUpdate]:
         """Every template of a business account as it stands now (for a sync at startup).
         Needs the whatsapp_business_management permission."""
@@ -571,6 +595,12 @@ class WhatsAppCloud:
             location |= {"name": message.place} if message.place else {}
             location |= {"address": message.address} if message.address else {}
             body |= {"type": "location", "location": location}
+        elif message.kind == "image":
+            if not message.channel_media_id:  # the sender uploads first (meydan.media)
+                raise SendError("image: no media id (not uploaded)", retryable=False)
+            image: dict[str, Any] = {"id": message.channel_media_id}
+            image |= {"caption": message.caption} if message.caption else {}
+            body |= {"type": "image", "image": image}
         elif message.kind == "contact":
             # wa_id makes WhatsApp show "Message" and "Save contact" (without it: "Invite").
             name, _, rest = (message.contact_name or "").partition(" ")

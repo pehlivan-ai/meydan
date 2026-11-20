@@ -118,9 +118,9 @@ class EndpointUpdate:
 @dataclass(frozen=True)
 class Outbound:
     """Something to send in a conversation: free-form text, an approved template, a location
-    (a map pin), choices (a question with options to tap) or a contact card."""
+    (a map pin), choices (a question with options to tap), a contact card or an image."""
 
-    kind: Literal["text", "template", "location", "choices", "contact"]
+    kind: Literal["text", "template", "location", "choices", "contact", "image"]
     text: str = ""
     template: str | None = None
     language: str | None = None
@@ -150,6 +150,14 @@ class Outbound:
     contact_phone: str | None = None
     contact_org: str | None = None
     contact_title: str | None = None
+    # An image: the file's key in meydan.media and an optional caption under it.
+    media: str | None = None
+    caption: str | None = None
+    # Filled by the sender when the message leaves, never stored: the channel's id for the file
+    # (WhatsApp) or its bytes and type (a channel that takes the file itself).
+    channel_media_id: str | None = field(default=None, compare=False, repr=False)
+    media_bytes: bytes | None = field(default=None, compare=False, repr=False)
+    media_mime: str | None = field(default=None, compare=False, repr=False)
 
     @classmethod
     def text_message(cls, text: str, *, ref: str | None = None) -> "Outbound":
@@ -250,6 +258,23 @@ class Outbound:
         return cls(kind="contact", text=text, contact_name=name, contact_phone=phone,
                    contact_org=org, contact_title=title, ref=ref)  # fmt: skip
 
+    @classmethod
+    def image_message(
+        cls,
+        media: str,
+        *,
+        caption: str | None = None,
+        alt: str | None = None,
+        ref: str | None = None,
+    ) -> "Outbound":
+        """An image, by its key in meydan.media (`media.put`): it arrives like a photo someone
+        sent. `caption` is shown under it; `alt` only says in transcripts what it was (e.g.
+        "Spring Cup poster"), so an agent reading the conversation knows it went out."""
+        if not media:
+            raise ValueError("an image needs a media key (meydan.media.put)")
+        text = "\n".join(x for x in (f"[image: {alt}]" if alt else "[image]", caption) if x)
+        return cls(kind="image", text=text, media=media, caption=caption, ref=ref)
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
@@ -273,6 +298,8 @@ class Outbound:
             "contact_phone": self.contact_phone,
             "contact_org": self.contact_org,
             "contact_title": self.contact_title,
+            "media": self.media,
+            "caption": self.caption,
         }
 
     @classmethod

@@ -238,3 +238,21 @@ async def test_a_contact_card_goes_as_a_telegram_contact():
     [(path, body)] = calls
     assert path.endswith("/sendContact") and body["phone_number"] == "+905550000002"
     assert (body["first_name"], body["last_name"]) == ("Ada", "Kaya")
+
+
+async def test_an_image_goes_as_a_photo_with_the_file():
+    from dataclasses import replace
+
+    seen = []
+
+    def handle(request):
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 43}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    image = replace(Outbound.image_message("k" * 64, caption="Afiş"), media_bytes=b"\xff\xd8j",
+                    media_mime="image/jpeg")  # fmt: skip
+    await Telegram([TOKEN], client=client).send("111", "900", image)
+    [r] = seen
+    assert r.url.path.endswith("/sendPhoto")
+    assert b'name="photo"' in r.content and b'name="caption"' in r.content
