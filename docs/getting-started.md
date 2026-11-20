@@ -97,6 +97,28 @@ uv add --editable ../meydan            # the app now runs your working copy
 Before the app merges: release a tag in meydan, then point the app back at it
 (`rev = "vX.Y.Z"` under `[tool.uv.sources]` in its `pyproject.toml`) and `uv sync`.
 
+### An admin service next to your app
+
+Build a second FastAPI app from the same parts, on its own host and with its own cookie:
+
+```python
+def create_admin_app(settings: Settings | None = None) -> FastAPI:
+    parts = compose(settings or Settings())
+    auth = Auth(
+        parts.engine,
+        runtime_tables,
+        AuthConfig(audience="ops", code_prefix="OPS"),
+        resolve_scopes=parts.access.scopes,  # roles in your model -> scopes
+    )
+    app = FastAPI(lifespan=...)  # access.start(), then access.run(stop) keeps the roles synced
+    app.include_router(auth.routes(), prefix="/auth")
+    app.include_router(observe_routes(auth, Visibility.trusted("ops")), prefix="/observe")
+    return app
+```
+
+- Your screens are a static client of this API. This API decides what each person sees.
+- A session of the admin service does not work in your public app, and the reverse.
+
 ### What belongs in meydan
 
 A pattern moves in once several real apps need it. Until then it stays in the app. Nothing

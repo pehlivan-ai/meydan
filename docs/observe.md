@@ -83,7 +83,37 @@ answer does (a role, a registration) is the app's interceptor.
 function `engagement(sent_at=, delivered_at=, seen_at=, answered_at=, within=)`. `interactions`
 gives every message (by `ref`, template, `conversation_id` or `turn_id`) its `engagement`,
 `answered_at`, `answer` (`explicit` | `implicit`), `undeliverable` and the channel's `seen_bias`
-(`SEEN_BIAS`). Rules and the channel table: README > See how far each message got.
+(`SEEN_BIAS`).
+
+Every message we send, a template or an agent's reply, climbs one scale. The scale is the same on
+every channel, so you can compare channels and use a level as a label (for example, feedback on
+an agent's replies).
+
+| Level | Meaning | WhatsApp | Email | SMS / push (later) |
+|---|---|---|---|---|
+| **0** none | We sent it. Nothing came back. | — | — | — |
+| **1** delivered | It reached their device or mailbox. | `delivered` | accepted by their server | carrier delivery report / push delivered |
+| **2** seen | They saw it. | `read` | opened (tracking pixel) | — / push opened |
+| **3** answered | They answered it. | a button or a quoted reply (`context.id`), or a message before our next one | `In-Reply-To` / `References`, or a message before our next one | a message before our next one |
+
+```python
+from datetime import timedelta
+from meydan.observe.query import interactions
+
+for m in interactions(conn, tables, who, turn_id=turn_id, within=timedelta(hours=24)):
+    m.engagement, m.answer, m.seen_bias  # 0..3, "explicit" | "implicit" | None, "under" | "over"
+```
+
+- Each level includes the levels below it. An answer counts as seen without a read receipt.
+- meydan stores no level. It calculates the level from the times it keeps, so you can ask for
+  any horizon later (`within=`).
+- An answer that points at the message (a button, a quote, an email reply) is explicit. A message
+  from the person before our next message is implicit, and it belongs to the whole reply.
+- A message that the channel cannot deliver has no level (`undeliverable=True`). It is a failure
+  of the system, not a behaviour of the person.
+- "Seen" leans differently per channel (`seen_bias`). WhatsApp read receipts can be off
+  (`under`: missing, never false). Email opens fire on image prefetch (`over`: can be false).
+- The scale says how far a message got, not what the answer said.
 
 ## Not here (yet)
 - Deep traces (spans per model call and tool call): an optional OpenTelemetry export (planned).
