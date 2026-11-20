@@ -6,6 +6,19 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.32.0] - 2026-11-20
+### Added
+- `meydan.media`: files we send, kept once by their SHA-256 (`media.put`, `media.load`). Where the
+  bytes live is the app's choice: `MediaStore`; the default `PostgresStore` keeps them in
+  `<prefix>media_blobs` (bytea). `Runtime(media_store=)`. See docs/media.md.
+- `Outbound.image_message(key, caption=, alt=)`: an image, as a person sends a photo. The sender
+  uploads it from the sending number on WhatsApp (`WhatsAppCloud.upload`) and reuses the media id
+  for 29 days (`<prefix>media_uploads`); Telegram gets the file with `sendPhoto`. A key with no
+  file is a dead letter.
+### Upgrading
+- New tables `<prefix>media`, `<prefix>media_blobs`, `<prefix>media_uploads` (autogenerate sees
+  them).
+
 ## [0.31.0] - 2026-11-19
 ### Added
 - `Outbound.contact_message(name, phone, org=, title=)`: a contact card. WhatsApp: a `contacts`

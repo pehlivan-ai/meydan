@@ -22,12 +22,14 @@ Two groups (docs/identity.md):
 from dataclasses import dataclass
 
 from sqlalchemy import (
+    BigInteger,
     CheckConstraint,
     Column,
     DateTime,
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     MetaData,
     Numeric,
     PrimaryKeyConstraint,
@@ -81,6 +83,9 @@ class RuntimeTables:
     notify_subscriptions: Table
     notifications: Table
     notify_deliveries: Table
+    media: Table
+    media_blobs: Table
+    media_uploads: Table
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -577,6 +582,37 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         postgresql_where=notify_deliveries.c.status == "pending",
     )
 
+    # Media we send (meydan.media): one row per file, keyed by its SHA-256, saying which store
+    # holds its bytes. `media_blobs` is the Postgres store's; another store keeps them elsewhere.
+    media = Table(
+        f"{prefix}media",
+        metadata,
+        Column("key", Text, primary_key=True),  # SHA-256 of the bytes, hex
+        Column("mime", Text, nullable=False),
+        Column("size", BigInteger, nullable=False),
+        Column("store", Text, nullable=False),  # MediaStore.name that holds the bytes
+        now_col("created_at"),
+    )
+    media_blobs = Table(
+        f"{prefix}media_blobs",
+        metadata,
+        Column("key", Text, ForeignKey(f"{prefix}media.key", ondelete="CASCADE"), primary_key=True),
+        Column("data", LargeBinary, nullable=False),
+    )
+    # A channel's own id for a file it was given (WhatsApp: a media id, per sending number, kept
+    # 30 days by Meta), so a file goes up once and is sent by id after that.
+    media_uploads = Table(
+        f"{prefix}media_uploads",
+        metadata,
+        Column("media_key", Text, ForeignKey(f"{prefix}media.key", ondelete="CASCADE"),
+               nullable=False),
+        Column("channel", Text, nullable=False),
+        Column("from_number", Text, nullable=False),
+        Column("channel_media_id", Text, nullable=False),
+        now_col("uploaded_at"),
+        PrimaryKeyConstraint("media_key", "channel", "from_number"),
+    )  # fmt: skip
+
     return RuntimeTables(
         actors=actors,
         identities=identities,
@@ -601,4 +637,7 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         notify_subscriptions=notify_subscriptions,
         notifications=notifications,
         notify_deliveries=notify_deliveries,
+        media=media,
+        media_blobs=media_blobs,
+        media_uploads=media_uploads,
     )

@@ -6,10 +6,12 @@ import logging
 import random
 import uuid
 from collections.abc import Sequence
+from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Connection, insert, text, update
+from sqlalchemy import Connection, func, insert, select, text, update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from meydan.channels.base import Outbound, SendError
 from meydan.runtime import templates
@@ -27,6 +29,8 @@ def backoff(attempt: int, min_wait_s: float = 0) -> float:
 
 
 AUTHORS = ("agent", "staff", "system")
+# How long a channel's id for an uploaded file is used (WhatsApp keeps uploads 30 days).
+UPLOAD_TTL = timedelta(days=29)
 
 
 class Outbox(_Part):
@@ -153,9 +157,10 @@ class Outbox(_Part):
         attempts = row["attempts"] + 1
         base = {"attempts": attempts, "updated_at": _clock()}
         try:
-            wamid = await self.channel.send(
-                row["from_number"], row["to"], Outbound.from_payload(row["message"])
-            )
+            message = Outbound.from_payload(row["message"])
+            if message.kind == "image":
+                message = await self._with_media(row, message)
+            wamid = await self.channel.send(row["from_number"], row["to"], message)
         except SendError as e:
             if not e.retryable or attempts >= self.cfg.max_send_attempts:
                 log.warning("dead letter %s: %s", row["id"], e.reason)
@@ -177,3 +182,50 @@ class Outbox(_Part):
         if row["message"].get("otp"):  # a one-time code isn't kept once it has left
             sent["message"] = {**row["message"], "otp": "******"}
         return sent
+
+    async def _with_media(self, row: dict[str, Any], message: Outbound) -> Outbound:
+        """The image as the channel takes it: an id for a file it already has (uploaded once per
+        sending number, reused while Meta keeps it), or else the file itself."""
+        from meydan import media  # here: meydan.media imports the runtime's tables
+
+        u, key, store = self.t.media_uploads, message.media, self.rt.media_store
+        where = (u.c.media_key == key, u.c.channel == row["channel"],
+                 u.c.from_number == row["from_number"])  # fmt: skip
+
+        def cached() -> str | None:
+            with self.engine.connect() as c:
+                return c.scalar(
+                    select(u.c.channel_media_id).where(
+                        *where, u.c.uploaded_at > func.now() - UPLOAD_TTL
+                    )
+                )
+
+        def read() -> tuple[bytes, str]:
+            with self.engine.connect() as c:
+                return media.load(c, self.t, key, store=store)
+
+        def remember(media_id: str) -> None:
+            with self.engine.begin() as c:
+                c.execute(
+                    pg_insert(u)
+                    .values(media_key=key, channel=row["channel"], from_number=row["from_number"],
+                            channel_media_id=media_id)
+                    .on_conflict_do_update(
+                        index_elements=[u.c.media_key, u.c.channel, u.c.from_number],
+                        set_={"channel_media_id": media_id, "uploaded_at": func.now()},
+                    )
+                )  # fmt: skip
+
+        try:
+            upload = getattr(self.channel, "upload", None)
+            if upload is None:  # a channel that takes the file with the message
+                data, mime = await asyncio.to_thread(read)
+                return replace(message, media_bytes=data, media_mime=mime)
+            media_id = await asyncio.to_thread(cached)
+            if media_id is None:
+                data, mime = await asyncio.to_thread(read)
+                media_id = await upload(row["from_number"], data, mime)
+                await asyncio.to_thread(remember, media_id)
+            return replace(message, channel_media_id=media_id)
+        except media.MediaMissingError as e:
+            raise SendError(f"image: no file {e}", retryable=False) from None
