@@ -12,6 +12,10 @@ is rows (`meydan.runtime.transcript`). This module is the one place that knows P
   from that context, never from an argument the model supplied.
 - A `ToolError` (a business rule) becomes `{"error": "..."}`, which the model can explain. The
   context manager still sees the exception, so it can roll back.
+- `tool(fn, context)` is `as_tool` as a Pydantic AI `Tool`, and also tells the model what the
+  tool returns when the return type describes its fields. `undescribed_tool(fn)` and
+  `assert_tool_described(*fns)` are for your tests: the tool, its parameters and what it returns,
+  each with a word on it (as `meydan.reply.assert_described` is for a reply).
 - `history(lines)` turns a transcript into model messages: what the person said as requests,
   what we sent as responses, consecutive lines of one side merged, starting with the person.
 - `handler(agent, ...)` is an agent as a turn handler: what every app wrote around its agent
@@ -40,7 +44,7 @@ from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Any
 
-from pydantic_ai import RunContext
+from pydantic_ai import RunContext, Tool
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
@@ -77,6 +81,91 @@ def as_tool(fn: Callable[..., Any], context: Context) -> Callable[..., Any]:
     tool.__signature__ = sig.replace(parameters=[first, *params[1:]])  # type: ignore[attr-defined]
     tool.__annotations__ = {**fn.__annotations__, params[0].name: RunContext[Any]}
     return tool
+
+
+def tool(fn: Callable[..., Any], context: Context, *, prepare: Any = None) -> Tool[Any]:
+    """`as_tool(fn, context)` as a Pydantic AI `Tool`. What the tool returns is described to the
+    model too when its type says something: a field with a `description` anywhere in the return
+    type (models, nested models, lists of them) sends the return schema with the tool (Pydantic
+    AI's `include_return_schema`; natively for Gemini, in the tool's description elsewhere).
+
+    Why: the model reads a tool's name, docstring and parameters, and the result's values, but
+    not what a field of the result means. `{"places_left": 0}` is a guess ("full"? "unknown"?)
+    until a description says it ("0: full, offer the next time"). Describing a field is asking
+    for the model to read it; a return type with no descriptions costs nothing extra.
+    `prepare` is passed to the `Tool` (e.g. closing a parameter to a list read per call)."""
+    built = Tool(as_tool(fn, context), prepare=prepare)
+    returns = built.function_schema.return_schema
+    if returns and _undescribed_properties(returns, require_all=False) is not None:
+        built = Tool(as_tool(fn, context), prepare=prepare, include_return_schema=True)
+    return built
+
+
+def undescribed_tool(fn: Callable[..., Any]) -> list[str]:
+    """For your tests: what the model would read of a tool without a word on it: the tool with no
+    docstring, parameters with no description (the docstring's `Args:`), and fields of what it
+    returns with no `description`. Each as a sentence saying what to add; empty when all is said."""
+    built = Tool(as_tool(fn, _no_context))
+    name = fn.__name__
+    found = []
+    if not (built.description or "").strip():
+        found.append(f"{name} has no docstring: say what it does and when to use it.")
+    params = built.function_schema.json_schema
+    for p in _undescribed_properties(params, require_all=True) or []:
+        found.append(f"{name}({p}) has no description: add it under Args: in the docstring.")
+    returns = built.function_schema.return_schema
+    for p in (_undescribed_properties(returns, require_all=True) or []) if returns else []:
+        found.append(
+            f"{name} returns {p} with no description: say what it means and what the model does "
+            'with it, e.g. Field(description="...").'
+        )
+    return found
+
+
+def assert_tool_described(*fns: Callable[..., Any]) -> None:
+    """For your tests: fails listing everything `undescribed_tool` finds in these tools."""
+    if found := [line for fn in fns for line in undescribed_tool(fn)]:
+        raise AssertionError("\n".join(found))
+
+
+def _no_context(ctx: RunContext[Any]) -> AbstractContextManager[ToolContext]:
+    raise RuntimeError("only for reading the tool's schema")
+
+
+def _undescribed_properties(schema: dict[str, Any], *, require_all: bool) -> list[str] | None:
+    """Paths of object properties with no description, following `$ref`s and arrays. With
+    `require_all=False`: None when no property anywhere is described (nothing to send)."""
+    defs = schema.get("$defs", {})
+    missing: list[str] = []
+    described = False
+    seen: set[str] = set()
+
+    def walk(node: dict[str, Any], path: str) -> None:
+        nonlocal described
+        if "$ref" in node:
+            ref = node["$ref"].rsplit("/", 1)[-1]
+            if ref in seen:
+                return
+            seen.add(ref)
+            walk(defs.get(ref, {}), path)
+            return
+        for key in ("anyOf", "oneOf", "allOf"):
+            for branch in node.get(key, []):
+                walk(branch, path)
+        if node.get("type") == "array" and isinstance(node.get("items"), dict):
+            walk(node["items"], f"{path}[]")
+        for name, prop in (node.get("properties") or {}).items():
+            here = f"{path}.{name}" if path else name
+            if (prop.get("description") or "").strip():
+                described = True
+            else:
+                missing.append(here)
+            walk(prop, here)
+
+    walk(schema, "")
+    if not require_all:
+        return missing if described else None
+    return missing
 
 
 def history(lines: Iterable[Said]) -> list[ModelMessage]:

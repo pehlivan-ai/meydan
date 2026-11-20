@@ -133,7 +133,7 @@ are in Postgres, so the app needs no message broker and no cache.
 | `meydan.runtime.templates` | Keeps the state of each message template (review, pause, category, quality). The sender sends, holds or stops by that state. | [templates](docs/templates.md) | available |
 | `meydan.runtime.expect` | Asks with buttons and waits for the answer (invites, confirmations). Checks who pressed, and when. | [expect](docs/expect.md) | available |
 | `meydan.runtime.endpoints` | Your own numbers and mail addresses, and their health. | [endpoints](docs/endpoints.md) | available |
-| `meydan.agent` | Pydantic AI adapter: tools, history from the transcript, a time limit, usage records. | `meydan.agent` docstring | available |
+| `meydan.agent` | Pydantic AI adapter: tools, history from the transcript, a time limit, usage records. Tool results that say what their fields mean, and a test that nothing the model reads is undescribed. | [tools](docs/tools.md) | available |
 | `meydan.reply` | A reply as bubbles, then attachments (a map pin, a photo, a contact card, choices). The model names a thing, and your code finds it. The shape is checked where the model makes it. | [reply](docs/reply.md) | available |
 | `meydan.media` | Files that you send, kept once by their SHA-256, in a store that you choose (Postgres by default). | [media](docs/media.md) | available |
 | `meydan.tools` | The tool contract: the person comes from the channel, never from the model. | `meydan.tools` docstring | available |

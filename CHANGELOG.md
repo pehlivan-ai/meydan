@@ -6,6 +6,17 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.36.0] - 2026-11-20
+### Added
+- Tool feedback, the result half of the agent-computer interface (docs/tools.md):
+  `meydan.agent.tool(fn, context, prepare=)` builds a Pydantic AI `Tool` and sends the return
+  schema with it when a field of the returned type has a description (describing a field is
+  asking for the model to read it); `undescribed_tool(fn)` and `assert_tool_described(*fns)` for
+  tests: a tool with no docstring, parameters with no description, returned fields (nested
+  models and lists included) with no description.
+### Upgrading
+- Nothing to migrate. `as_tool` is unchanged; use `tool` where you built `Tool(as_tool(...))`.
+
 ## [0.35.0] - 2026-11-20
 ### Added
 - Observe: each `Line` of a conversation has its `kind` and its parts, as the person saw them:
