@@ -185,7 +185,28 @@ class Person:
 
 
 class Location(Attachment):
-    """A map pin, and its link right after it when `Place.url` is set. Implement `resolve`."""
+    """A map pin, and its link right after it when `Place.url` is set. Implement `resolve`, or
+    declare it from a table with `Location.of(...)`."""
+
+    @classmethod
+    def of(
+        cls, table: Any, *, by: Any, type: str, lat: Any, lng: Any, name: Any = None,
+        address: Any = None, url: Any = None, field: str | None = None, when: str = "",
+        describe: str = "", where: dict[Any, Any] | None = None, visible: Any = None,
+    ) -> type["Location"]:  # fmt: skip
+        """A Location found by `by` in `table`. Columns or templates ("{name}") for each part;
+        a row without coordinates resolves to nothing."""
+
+        def build(row: Any) -> Place | None:
+            la, ln = _value(row, lat), _value(row, lng)
+            if la is None or ln is None:
+                return None
+            return Place(la, ln, _value(row, name), _value(row, address), _value(row, url))
+
+        cols = {"lat": lat, "lng": lng, "name": name, "address": address, "url": url}
+        return _declared(cls, table, by=by, type=type, field=field, when=when,
+                         describe=describe, columns=cols, where=where, visible=visible,
+                         build=build)  # type: ignore[return-value]  # fmt: skip
 
     def resolve(self, ctx: Any) -> Place | None:
         raise NotImplementedError(f"{type(self).__name__} must implement resolve")
@@ -201,7 +222,28 @@ class Location(Attachment):
 
 
 class Image(Attachment):
-    """A photo, as a person sends one. Implement `resolve`."""
+    """A photo, as a person sends one. Implement `resolve`, or declare it from a table with
+    `Image.of(...)`."""
+
+    @classmethod
+    def of(
+        cls, table: Any, *, by: Any, type: str, media: Any, alt: Any = None,
+        caption: Any = None, field: str | None = None, when: str = "", describe: str = "",
+        where: dict[Any, Any] | None = None, visible: Any = None,
+    ) -> type["Image"]:  # fmt: skip
+        """An Image found by `by` in `table`; `media` is the column holding the meydan.media
+        key (a row without one resolves to nothing)."""
+
+        def build(row: Any) -> ImageRef | None:
+            key = _value(row, media)
+            if not key:
+                return None
+            return ImageRef(key, alt=_value(row, alt), caption=_value(row, caption))
+
+        cols = {"media": media, "alt": alt, "caption": caption}
+        return _declared(cls, table, by=by, type=type, field=field, when=when,
+                         describe=describe, columns=cols, where=where, visible=visible,
+                         build=build)  # type: ignore[return-value]  # fmt: skip
 
     def resolve(self, ctx: Any) -> ImageRef | None:
         raise NotImplementedError(f"{type(self).__name__} must implement resolve")
@@ -214,7 +256,28 @@ class Image(Attachment):
 
 
 class Contact(Attachment):
-    """A contact card someone can message, call or save. Implement `resolve`."""
+    """A contact card someone can message, call or save. Implement `resolve`, or declare it
+    from a table with `Contact.of(...)`."""
+
+    @classmethod
+    def of(
+        cls, table: Any, *, by: Any, type: str, name: Any, phone: Any, title: Any = None,
+        org: Any = None, field: str | None = None, when: str = "", describe: str = "",
+        where: dict[Any, Any] | None = None, visible: Any = None,
+    ) -> type["Contact"]:  # fmt: skip
+        """A Contact found by `by` in `table` (a row without a name or phone resolves to
+        nothing)."""
+
+        def build(row: Any) -> Person | None:
+            n, p = _value(row, name), _value(row, phone)
+            if not n or not p:
+                return None
+            return Person(n, p, title=_value(row, title), org=_value(row, org))
+
+        cols = {"name": name, "phone": phone, "title": title, "org": org}
+        return _declared(cls, table, by=by, type=type, field=field, when=when,
+                         describe=describe, columns=cols, where=where, visible=visible,
+                         build=build)  # type: ignore[return-value]  # fmt: skip
 
     def resolve(self, ctx: Any) -> Person | None:
         raise NotImplementedError(f"{type(self).__name__} must implement resolve")
@@ -224,6 +287,121 @@ class Contact(Attachment):
         if p is None:
             return []
         return [Outbound.contact_message(p.name, p.phone, org=p.org, title=p.title)]
+
+
+# --- Declared from a table --------------------------------------------------------------------
+# The common case, "find the row with this key, use these columns", without writing `resolve`:
+#
+#     Venue = Location.of(Club, by=Club.slug, field="venue", type="location",
+#                         when="When they ask where it is.", describe="The venue's slug.",
+#                         lat=Club.lat, lng=Club.lng, name=Club.name, address=Club.address,
+#                         url=Club.maps_url)
+#
+# It makes an ordinary attachment class (its docstring says what maps to what) whose `resolve`
+# runs one SELECT through the session in `ctx` (a SQLAlchemy Session, or anything with
+# `.session`). A missing row, an empty required column, or `visible(ctx, row)` False resolves to
+# nothing. Columns that aren't the table's fail when the class is made. Needs SQLAlchemy.
+
+
+def _session(ctx: Any) -> Any:
+    from sqlalchemy.orm import Session
+
+    session = ctx if isinstance(ctx, Session) else getattr(ctx, "session", None)
+    if not isinstance(session, Session):
+        raise TypeError(
+            "an attachment declared with .of() reads through a SQLAlchemy Session: pass one as "
+            "ctx to reply.outbound(ctx), or an object with a .session attribute"
+        )
+    return session
+
+
+def _declared(
+    base: type[Attachment],
+    table: Any,
+    *,
+    by: Any,
+    type: str,
+    field: str | None,
+    when: str,
+    describe: str,
+    columns: dict[str, Any],
+    where: dict[Any, Any] | None,
+    visible: Any,
+    build: Any,
+) -> type[Attachment]:
+    from pydantic import create_model
+    from sqlalchemy import inspect as sa_inspect
+    from sqlalchemy import select
+
+    mapper = sa_inspect(table, raiseerr=False)
+    if mapper is None or not hasattr(mapper, "attrs"):
+        raise TypeError(f"{table!r} is not a mapped SQLAlchemy class")
+    own = {a.key for a in mapper.attrs}
+
+    def check(name: str, col: Any) -> None:
+        if col is None:
+            return
+        key = getattr(col, "key", None)
+        if getattr(col, "class_", None) is not table or key not in own:
+            raise TypeError(
+                f"{base.__name__}.of({table.__name__}): {name}={col!r} is not a column of "
+                f"{table.__name__}; pass {table.__name__}.<column>"
+            )
+
+    check("by", by)
+    for name, col in columns.items():
+        if hasattr(col, "class_"):  # a column; a template ("{name}") or a callable is the app's
+            check(name, col)
+    for col in where or {}:
+        check("where", col)
+
+    field = field or by.key
+    kind = Literal[type]  # type: ignore[valid-type]
+    cls = create_model(  # type: ignore[call-overload]
+        f"{base.__name__}{table.__name__}",
+        __base__=base,
+        type=(kind, type),
+        **{field: (str, Field(description=describe or None))},
+    )
+    cls.when = when
+    filters = list((where or {}).items())
+
+    def resolve(self: Any, ctx: Any) -> Any:
+        key: Any = getattr(self, field)
+        python_type = getattr(by.type, "python_type", str)
+        if python_type is not str:
+            try:
+                key = python_type(key)
+            except (TypeError, ValueError):
+                return None
+        query = select(table).where(by == key, *(c == v for c, v in filters))
+        row = _session(ctx).scalar(query)
+        if row is None or (visible is not None and not visible(ctx, row)):
+            return None
+        return build(row)
+
+    cls.resolve = resolve
+    mapping = ", ".join(
+        f"{k}={getattr(v, 'key', v)!s}" for k, v in columns.items() if v is not None
+    )
+    cls.__doc__ = (
+        f"{base.__name__} of a {table.__name__} row, found by {by.key} (the model writes "
+        f"`{field}`): {mapping}."
+    )
+    return cls
+
+
+def _value(row: Any, col: Any) -> Any:
+    if col is None:
+        return None
+    if isinstance(col, str):  # a template over the row's columns, e.g. "{name} poster"
+        from sqlalchemy import inspect as sa_inspect
+
+        attrs = sa_inspect(row).mapper.column_attrs
+        return col.format_map({a.key: getattr(row, a.key) for a in attrs})
+    if callable(col) and not hasattr(col, "class_"):
+        return col(row)
+    return getattr(row, col.key)
 
 
 class Option(BaseModel):
