@@ -73,48 +73,63 @@ Most of the time the thing is a row in one of your tables. Declare it, and meyda
 ```python
 from meydan.reply import Attachments, Choices, Contact, Image, Location, Reply
 
-Venue = Location.of(
-    Club,
-    by=Club.slug,
-    field="venue",
-    type="location",
-    when="When they ask where it is or how to get there.",
-    describe="The venue's slug, from a tool result.",
-    lat=Club.lat,
-    lng=Club.lng,
-    name=Club.name,
-    address=Club.address,
-    url=Club.maps_url,
-)
-Poster = Image.of(
-    Event,
-    by=Event.id,
-    field="event",
-    type="poster",
-    when="When they ask about an event and haven't seen its poster yet.",
-    describe="The event's id, from a tool result.",
-    media=Event.poster,
-    alt="{name} poster",  # a template over the row's columns
-    visible=lambda ctx, event: can_see(ctx, event),  # False: nothing is sent
-)
-Desk = Contact.of(
-    Card,
-    by=Card.purpose,
-    type="desk",
-    when="When they want to talk to sales.",
-    describe="What it is about.",
-    name=Card.name,
-    phone=Card.phone,
-    title=Card.title,
-    where={Card.owner: "platform"},  # fixed filters
-)
+
+class Venue(
+    Location.of(
+        Club,
+        by=Club.slug,
+        field="venue",
+        type="location",
+        when="When they ask where it is or how to get there.",
+        describe="The venue's slug, from a tool result.",
+        lat=Club.lat,
+        lng=Club.lng,
+        name=Club.name,
+        address=Club.address,
+        url=Club.maps_url,
+    )
+):
+    """A venue's pin and its maps link."""
+
+
+class Poster(
+    Image.of(
+        Event,
+        by=Event.id,
+        field="event",
+        type="poster",
+        when="When they ask about an event and haven't seen its poster yet.",
+        describe="The event's id, from a tool result.",
+        media=Event.poster,
+        alt="{name} poster",  # a template over the row's columns
+        visible=lambda ctx, event: can_see(ctx, event),  # False: nothing is sent
+    )
+):
+    """An event's poster."""
+
+
+class Desk(
+    Contact.of(
+        Card,
+        by=Card.purpose,
+        type="desk",
+        when="When they want to talk to sales.",
+        describe="What it is about.",
+        name=Card.name,
+        phone=Card.phone,
+        title=Card.title,
+        where={Card.owner: "platform"},  # fixed filters
+    )
+):
+    """The sales desk's card."""
 ```
 
 - The model writes `field` (default: the `by` column's name); everything else comes from the
   row. A missing row, a row without the parts it needs (coordinates, a media key, a phone), or
   `visible(ctx, row)` False sends nothing.
 - A column of another table fails when the class is made, not at the first message.
-- What you get is an ordinary attachment class: its docstring says what maps to what, and
+- Wrap it in a class of your own, as above: the model sees the class's name in the schema
+  (`Venue`, not a generated `LocationClub`). What you get is an ordinary attachment class, and
   `assert_described` reads it like any other.
 - `ctx` is a SQLAlchemy `Session`, or anything with a `.session` (e.g. your own context with who
   wrote, for `visible`).

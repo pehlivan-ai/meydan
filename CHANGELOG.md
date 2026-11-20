@@ -5,6 +5,9 @@ versions follow [Semantic Versioning](https://semver.org/) (before 1.0, a minor 
 tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
+### Docs
+- docs/reply.md: wrap an attachment declared with `.of()` in a class of your own, so the model
+  sees its name (`Venue`) in the schema rather than a generated one (`LocationClub`).
 
 ## [0.34.0] - 2026-11-20
 ### Added
