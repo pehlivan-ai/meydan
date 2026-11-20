@@ -6,6 +6,10 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 ### Docs
+- README rewritten in plain technical English (ASD-STE100 style: short sentences, one term per
+  concept, no filler). Every module and its doc in one table, recipes as links. The version is
+  in one place: the badge reads the latest tag. The engagement table moved to docs/observe.md,
+  the admin service recipe to docs/getting-started.md.
 - docs/reply.md: wrap an attachment declared with `.of()` in a class of your own, so the model
   sees its name (`Venue`) in the schema rather than a generated one (`LocationClub`).
 
