@@ -18,6 +18,24 @@ meydan keeps each template's latest state and the sender asks it before sending 
 When the template becomes sendable again, held messages go back in line, due at once. That is
 the channel's own advice for paused templates: halt, and resume when they're active again.
 
+## Sending one: parameters and an image header
+
+```python
+# named parameters ({{club}}):
+Outbound.template_message("tournament_reminder", "tr", club="Moda")
+# numbered parameters ({{1}}, {{2}}…), in order:
+Outbound.template_message("daily_plan", "tr", **{"1": "Ada"})
+# an image header: a file kept in meydan.media (since v0.38.0)
+key = media.put(conn, tables, png, "image/png")
+Outbound.template_message("daily_plan", "tr", media=key, **{"1": "Ada"})
+```
+
+A template is approved with one parameter format, named or numbered, and the message must use the
+same: WhatsApp refuses names for a numbered template. The image header is uploaded by the sender
+like an image message (once per sending number, reused while Meta keeps it) and goes as the
+header's `id`. On Telegram, which has no templates, it goes as a photo with the template's text as
+its caption.
+
 ## Where the state comes from
 
 1. **Webhooks.** Subscribe your WhatsApp Business Account webhook to

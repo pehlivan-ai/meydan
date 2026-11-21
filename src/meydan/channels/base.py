@@ -172,8 +172,12 @@ class Outbound:
         *,
         buttons: tuple[str, ...] = (),
         ref: str | None = None,
+        media: str | None = None,
         **params: str,
     ) -> "Outbound":
+        """An approved template. `params` fill its body: by name (`name="Ada"`) for a template
+        with named parameters, or `**{"1": "Ada"}` for one with numbered ones ({{1}}, {{2}}…).
+        `media`, a key in meydan.media, is its image header: uploaded like an image message."""
         # Positional-only, so a template parameter may be called `name` or `template` too.
         return cls(
             kind="template",
@@ -182,6 +186,7 @@ class Outbound:
             params=params,
             buttons=buttons,
             ref=ref,
+            media=media,
         )
 
     @classmethod

@@ -610,14 +610,25 @@ class WhatsAppCloud:
             except ValueError as e:  # never fits: no retry helps
                 raise SendError(str(e), retryable=False) from None
         else:
-            params = [
-                {"type": "text", "parameter_name": k, "text": v} for k, v in message.params.items()
-            ]
+            numbered = bool(message.params) and all(k.isdigit() for k in message.params)
+            if numbered:  # {{1}}, {{2}}…: in order, without names
+                ordered = sorted(message.params.items(), key=lambda kv: int(kv[0]))
+                params = [{"type": "text", "text": v} for _, v in ordered]
+            else:
+                params = [
+                    {"type": "text", "parameter_name": k, "text": v}
+                    for k, v in message.params.items()
+                ]
             template: dict[str, Any] = {
                 "name": message.template,
                 "language": {"code": message.language},
             }
             components: list[dict[str, Any]] = []
+            if message.media:  # an image header, uploaded first by the sender (meydan.media)
+                if not message.channel_media_id:
+                    raise SendError("template header: no media id (not uploaded)", retryable=False)
+                image_header = {"type": "image", "image": {"id": message.channel_media_id}}
+                components.append({"type": "header", "parameters": [image_header]})
             if params:
                 components.append({"type": "body", "parameters": params})
             if message.otp:  # authentication template: the code in the body and its button

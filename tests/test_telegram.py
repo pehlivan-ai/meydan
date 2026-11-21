@@ -256,3 +256,21 @@ async def test_an_image_goes_as_a_photo_with_the_file():
     [r] = seen
     assert r.url.path.endswith("/sendPhoto")
     assert b'name="photo"' in r.content and b'name="caption"' in r.content
+
+
+async def test_a_template_with_an_image_header_goes_as_a_photo_with_its_text():
+    from dataclasses import replace
+
+    seen = []
+
+    def handle(request):
+        seen.append(request)
+        return httpx.Response(200, json={"ok": True, "result": {"message_id": 44}})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handle))
+    plan = replace(Outbound.template_message("daily_plan", "tr", media="k" * 64, **{"1": "Ada"}),
+                   media_bytes=b"\x89PNG", media_mime="image/png")  # fmt: skip
+    await Telegram([TOKEN], client=client).send("111", "900", plan)
+    [r] = seen
+    assert r.url.path.endswith("/sendPhoto")
+    assert b'name="photo"' in r.content and b"daily_plan" in r.content  # the caption: its text

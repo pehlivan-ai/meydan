@@ -29,6 +29,7 @@ Details: docs/telegram.md.
 import asyncio
 import contextlib
 import html
+import json
 import logging
 import re
 from collections.abc import Callable, Iterable, Sequence
@@ -205,9 +206,19 @@ class Telegram:
                 for label, payload in zip(labels, message.buttons, strict=True)
             ]
             markup = {"reply_markup": {"inline_keyboard": [row]}} if row else {}
-            sent = await self.call(
-                from_number, "sendMessage", chat_id=chat, **self._text(text), **markup
-            )
+            if message.media:  # an image header: the picture, the rendered text as its caption
+                if message.media_bytes is None:
+                    raise SendError("template header: no file attached", retryable=False)
+                if markup:
+                    markup = {"reply_markup": json.dumps(markup["reply_markup"])}
+                sent = await self.call_with_file(
+                    from_number, "sendPhoto", "photo", message.media_bytes,
+                    message.media_mime or "image/jpeg", chat_id=chat, caption=text, **markup,
+                )  # fmt: skip
+            else:
+                sent = await self.call(
+                    from_number, "sendMessage", chat_id=chat, **self._text(text), **markup
+                )
         else:
             sent = await self.call(
                 from_number, "sendMessage", chat_id=chat, **self._text(message.text)

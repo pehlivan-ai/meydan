@@ -158,7 +158,7 @@ class Outbox(_Part):
         base = {"attempts": attempts, "updated_at": _clock()}
         try:
             message = Outbound.from_payload(row["message"])
-            if message.kind == "image":
+            if message.media:  # an image, or a template's image header
                 message = await self._with_media(row, message)
             wamid = await self.channel.send(row["from_number"], row["to"], message)
         except SendError as e:
