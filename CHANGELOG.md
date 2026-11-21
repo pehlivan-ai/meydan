@@ -6,6 +6,18 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.39.0] - 2026-11-22
+### Added
+- `Outbound.recall`: what the model reads of one of our messages in later turns, instead of its
+  text (`transcript` reads it). The outbox keeps the real message for the person and for those
+  allowed to see the conversation. `text_message(..., recall=...)`, `template_message(...)`.
+- `Outbound.fallback`: sent in a message's place when it cannot go: refused for good (a dead
+  letter) or reported `failed` later by a receipt. Queued once; dropped once the message is
+  delivered (or sent, on a channel without delivery receipts). `text_message`, `image_message`,
+  `template_message` take it.
+- docs/privacy.md: what the model reads, the four ways personal data reaches it, what is planned.
+  docs/failures.md: "When a message cannot go".
+
 ## [0.38.0] - 2026-11-22
 ### Added
 - A template's image header: `Outbound.template_message(..., media=key)`, a file kept in

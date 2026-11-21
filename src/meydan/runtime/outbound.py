@@ -10,7 +10,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import Connection, func, insert, select, text, update
+from sqlalchemy import Connection, func, insert, literal, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from meydan.channels.base import Outbound, SendError
@@ -31,6 +31,38 @@ def backoff(attempt: int, min_wait_s: float = 0) -> float:
 AUTHORS = ("agent", "staff", "system")
 # How long a channel's id for an uploaded file is used (WhatsApp keeps uploads 30 days).
 UPLOAD_TTL = timedelta(days=29)
+
+
+def queue_fallback(conn: Connection, t: Any, row: dict[str, Any]) -> bool:
+    """Queue a message's fallback in its place, as the next thing in its conversation, and forget
+    it on the row so it is queued once. False: the message has none."""
+    message = row["message"] or {}
+    fallback = message.get("fallback")
+    if not fallback:
+        return False
+    o = t.outbox
+    conn.execute(
+        insert(o).values(
+            channel=row["channel"], conversation_id=row["conversation_id"],
+            recipient_identity_id=row["recipient_identity_id"], from_number=row["from_number"],
+            to=row["to"], turn_id=row["turn_id"], seq=row["seq"], message=fallback,
+            ref=fallback.get("ref"), author=row["author"], author_actor_id=row["author_actor_id"],
+            created_at=_clock(), next_attempt_at=_clock(),
+        )
+    )  # fmt: skip
+    forget_fallback(conn, t, o.c.id == row["id"])
+    return True
+
+
+def forget_fallback(conn: Connection, t: Any, where: Any) -> None:
+    """Drop the fallback kept on rows: it is a copy of what the message says (a timetable's names,
+    say), kept only while the message might still fail."""
+    o = t.outbox
+    conn.execute(
+        update(o)
+        .where(where, o.c.message.has_key("fallback"))
+        .values(message=o.c.message.op("-")(literal("fallback")))
+    )
 
 
 class Outbox(_Part):
@@ -114,6 +146,19 @@ class Outbox(_Part):
         )
         return dict(row) if row else None
 
+    def _settle(self, conn: Connection, row: dict[str, Any], values: dict[str, Any]) -> None:
+        """A message that died goes out as its fallback, if it has one. One that left on a channel
+        that reports no deliveries (Telegram) can't be known to fail later: its fallback is
+        forgotten now; elsewhere a delivery receipt forgets it (inbound)."""
+        status = values.get("status")
+        if status == "dead":
+            if queue_fallback(conn, self.t, row) and "message" in values:
+                values["message"] = {k: v for k, v in values["message"].items() if k != "fallback"}
+        elif status == "sent" and "delivered" not in self.rt.rules.of(row["channel"]).receipts:
+            forget_fallback(conn, self.t, self.t.outbox.c.id == row["id"])
+            if "message" in values:
+                values["message"] = {k: v for k, v in values["message"].items() if k != "fallback"}
+
     def _save_attempt(self, conn: Connection, row_id: Any, values: dict[str, Any]) -> None:
         o = self.t.outbox
         conn.execute(update(o).where(o.c.id == row_id).values(**values))
@@ -134,6 +179,7 @@ class Outbox(_Part):
                 values = await asyncio.to_thread(self._template_check, conn, row)
                 if values is None:
                     values = await self._attempt(row)
+                await asyncio.to_thread(self._settle, conn, row, values)
                 await asyncio.to_thread(self._save_attempt, conn, row["id"], values)
             finally:
                 await asyncio.to_thread(conn.close)
