@@ -6,6 +6,16 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.38.0] - 2026-11-22
+### Added
+- A template's image header: `Outbound.template_message(..., media=key)`, a file kept in
+  meydan.media. The sender uploads it like an image message (once per sending number) and WhatsApp
+  gets it as the header's `id`; Telegram sends a photo with the template's text as its caption.
+- Numbered template parameters: `**{"1": "Ada"}` for a template approved with {{1}}, {{2}}…; they
+  go in order, without names (WhatsApp refuses names for a numbered template).
+### Changed
+- The outbox uploads the file of any message that carries one (`message.media`), not only images.
+
 ## [0.37.0] - 2026-11-22
 ### Added
 - `meydan.channels.instagram`: direct messages to an Instagram professional account (Instagram

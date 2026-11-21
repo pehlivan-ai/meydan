@@ -415,3 +415,25 @@ async def test_upload_a_file_then_send_the_image_by_id():
         await wa.send("222", "905550000001", Outbound.image_message("k" * 64))
     assert Outbound.from_payload(image.to_payload()) == image  # the id isn't part of the row
     assert "channel_media_id" not in image.to_payload()
+
+
+async def test_a_template_with_an_image_header_and_numbered_parameters():
+    """{{1}}-style parameters go in order without names; the header carries the uploaded id."""
+    from dataclasses import replace
+
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"messages": [{"id": "wamid.X"}]})
+
+    c = cloud(handler)
+    message = Outbound.template_message("daily_plan", "tr", media="k" * 64, **{"2": "B", "1": "A"})
+    with pytest.raises(SendError, match="not uploaded"):
+        await c.send("222", "905550000001", message)
+    await c.send("222", "905550000001", replace(message, channel_media_id="media.7"))
+    header, body = seen[0]["template"]["components"]
+    assert header == {"type": "header",
+                      "parameters": [{"type": "image", "image": {"id": "media.7"}}]}  # fmt: skip
+    assert body == {"type": "body", "parameters": [{"type": "text", "text": "A"},
+                                                   {"type": "text", "text": "B"}]}  # fmt: skip

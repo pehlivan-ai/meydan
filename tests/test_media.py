@@ -118,3 +118,19 @@ async def test_a_missing_file_is_a_dead_letter(db):
     with engine.connect() as c:
         row = c.execute(select(t.outbox)).one()
     assert row.status == "dead" and "no file" in row.last_error
+
+
+async def test_a_templates_image_header_goes_up_like_an_image(db):
+    engine, t = db
+    with engine.begin() as c:
+        key = media.put(c, t, PNG, "image/png")
+
+    async def plan(turn):
+        return [Outbound.template_message("daily_plan", "tr", media=key, **{"1": "Ada"})]
+
+    ch = Uploading()
+    rt = runtime(db, plan, ch)
+    receive(rt, [msg("w1", "plan?", T0)])
+    await rt.work_once()
+    await rt.send_once()
+    assert ch.uploads == [("222", len(PNG), "image/png")] and ch.ids == ["media.1"]
