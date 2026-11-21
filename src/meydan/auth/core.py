@@ -194,7 +194,7 @@ def sign_in_interceptor(
     "I didn't request a code" on a code we sent: that sign-in is cancelled, `on_reject` is told
     (e.g. audit it, tell the owners) and the person gets `rejected_reply`."""
     if payload_of is None:
-        from meydan.channels.whatsapp import reply_payload as payload_of
+        from meydan.channels.base import reply_payload as payload_of
 
     def intercept(conn: Connection, message: Inbound, routed: Routed) -> Intercepted | None:
         if payload_of(message) in REJECT_PAYLOADS:

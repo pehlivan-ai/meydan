@@ -33,6 +33,7 @@ class ChannelRules:
     # the channel allows instead (WhatsApp: an approved template). None: no window.
     reply_window: timedelta | None = None
     text_max: int | None = None  # characters in one text message
+    text_bytes_max: int | None = None  # UTF-8 bytes in one text, where a channel counts bytes
     button_payload_max: int | None = None  # bytes a button carries back when pressed
     receipts: frozenset[str] = field(default_factory=frozenset)  # "delivered", "read"
     # How "seen" leans: "under" (can be missing, never false), "over" (can be false), None.
@@ -58,6 +59,16 @@ TELEGRAM = ChannelRules(
     button_payload_max=64,
     # Telegram reports no delivery or read receipts to bots.
     receipts=frozenset(),
+)
+INSTAGRAM = ChannelRules(
+    # The messaging window; up to 7 days after a Click-to-Direct ad, which an app sets itself.
+    # Meta, Instagram API with Instagram Login, "Send messages".
+    reply_window=timedelta(hours=24),
+    # "Message text must be UTF-8 and be a 1000 bytes or less." Meta, "Send messages".
+    text_bytes_max=1000,
+    # `messaging_seen` webhooks; people can turn read receipts off. Meta, Instagram "Webhooks".
+    receipts=frozenset({"read"}),
+    seen_bias="under",
 )
 EMAIL = ChannelRules(
     # Delivery events from the provider; opens from a tracking pixel.
@@ -86,4 +97,6 @@ class Rules:
         return Rules(out)
 
 
-DEFAULT = Rules({"whatsapp": WHATSAPP, "telegram": TELEGRAM, "email": EMAIL})
+DEFAULT = Rules(
+    {"whatsapp": WHATSAPP, "telegram": TELEGRAM, "instagram": INSTAGRAM, "email": EMAIL}
+)

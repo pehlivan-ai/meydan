@@ -21,7 +21,7 @@ def test_the_platforms_rules_as_meydan_ships_them():
 
 def test_parts_read_the_rules_not_their_own_copy():
     assert DEFAULT.of("telegram").button_payload_max == telegram.CALLBACK_DATA_MAX
-    assert SEEN_BIAS == {"whatsapp": "under", "email": "over"}
+    assert SEEN_BIAS == {"whatsapp": "under", "instagram": "under", "email": "over"}
 
 
 def test_an_app_changes_only_what_it_names_and_meydans_rules_stay():

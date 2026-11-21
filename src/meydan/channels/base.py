@@ -324,3 +324,17 @@ class SendError(Exception):
         self.retryable = retryable
         self.code = code
         self.min_wait_s = min_wait_s  # channel-specific floor for the next attempt
+
+
+def reply_payload(message: Inbound) -> str | None:
+    """What a pressed button carries, on any channel: a template quick reply's or a tapped
+    option's payload (kind "button": WhatsApp quick replies, Telegram inline buttons, Instagram
+    quick replies), or a WhatsApp interactive button's or list row's id. None for anything else."""
+    raw = message.payload
+    if message.kind == "button":
+        return raw.get("button", {}).get("payload")
+    if message.kind == "interactive":
+        inter = raw.get("interactive", {})
+        reply = inter.get("button_reply") or inter.get("list_reply") or {}
+        return reply.get("id")
+    return None

@@ -5,8 +5,6 @@ least once and unordered, retried for days if we don't answer 200 within 5 secon
 """
 
 import contextlib
-import hashlib
-import hmac
 from collections.abc import Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -24,6 +22,11 @@ from meydan.channels.base import (
     TemplateUpdate,
 )
 
+# Re-exported: they lived here first and apps import them from here. Both are channel-neutral
+# now (`meydan.channels.base.reply_payload`, `meydan.channels.meta.verify_signature`).
+from meydan.channels.base import reply_payload as reply_payload
+from meydan.channels.meta import verify_signature as verify_signature
+
 CHANNEL = "whatsapp"
 GRAPH = "https://graph.facebook.com"
 
@@ -40,14 +43,6 @@ RETRYABLE_CODES = {
     2: 1.0,  # temporary service error
     1: 1.0,  # unknown/transient
 }
-
-
-def verify_signature(app_secret: str, body: bytes, header: str | None) -> bool:
-    """X-Hub-Signature-256 = 'sha256=' + HMAC-SHA256(app_secret, raw body)."""
-    if not app_secret or not header or not header.startswith("sha256="):
-        return False
-    digest = hmac.new(app_secret.encode(), body, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(digest, header.removeprefix("sha256="))
 
 
 def _ts(value: str | int) -> datetime:
@@ -109,19 +104,6 @@ def shared_contacts(message: Inbound) -> list[SharedContact]:
         out.append(SharedContact(name=name.get("formatted_name") or name.get("first_name", ""),
                                  phones=phones))  # fmt: skip
     return out
-
-
-def reply_payload(message: Inbound) -> str | None:
-    """What a pressed button carries: a template quick reply's payload, or an interactive
-    button's id. None for anything else."""
-    raw = message.payload
-    if message.kind == "button":
-        return raw.get("button", {}).get("payload")
-    if message.kind == "interactive":
-        inter = raw.get("interactive", {})
-        reply = inter.get("button_reply") or inter.get("list_reply") or {}
-        return reply.get("id")
-    return None
 
 
 # Interactive message limits. Meta, Cloud API "Interactive reply buttons messages" and

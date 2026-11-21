@@ -56,6 +56,9 @@ class ReplyStyle:
     # set it from what your people read. Channels refuse above their own limit (`text_max` in
     # meydan's channel rules, `meydan/rules.py`).
     max_chars: int | None = 600
+    # UTF-8 bytes in one bubble, for a channel that counts bytes: set it from the channel's
+    # rules, e.g. `DEFAULT.of("instagram").text_bytes_max`. None: no byte limit.
+    max_bytes: int | None = None
     markdown: bool = False  # allow headings, '**bold**', tables and '[text](url)' links
     dangling: bool = False  # allow a bubble that ends with ':' and leans on the next one
     max_attachments: int = 3  # things sent after the bubbles (a pin, a photo, a card, choices)
@@ -67,6 +70,8 @@ class ReplyStyle:
             raise ValueError("max_attachments must be 0 or more")
         if self.max_chars is not None and self.max_chars < 1:
             raise ValueError("max_chars must be at least 1, or None")
+        if self.max_bytes is not None and self.max_bytes < 1:
+            raise ValueError("max_bytes must be at least 1, or None")
 
     def problems(self, bubbles: Sequence[str], attachments: int | None = None) -> list[str]:
         """What is wrong with these bubbles, as sentences a model can act on. Empty when fine.
@@ -94,6 +99,11 @@ class ReplyStyle:
                 found.append(
                     f"Bubble {n} is {len(text)} characters; at most {self.max_chars}. Say it "
                     "shorter, or split it where one thought ends."
+                )
+            elif self.max_bytes is not None and len(text.encode()) > self.max_bytes:
+                found.append(
+                    f"Bubble {n} is too long for this channel ({len(text.encode())} bytes; at "
+                    f"most {self.max_bytes}). Say it shorter, or split it where one thought ends."
                 )
             if not self.markdown:
                 for pattern, name in _MARKDOWN:

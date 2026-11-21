@@ -34,12 +34,10 @@ from meydan.channels.base import Address, Outbound
 from meydan.runtime import identity
 from meydan.runtime.tables import RuntimeTables
 
-# How long after their last message a channel lets us write freely. Not listed: no window.
-WINDOWS = {"whatsapp": timedelta(hours=24)}
-
 
 class WindowClosedError(Exception):
-    """The channel's window for free-form messages has closed: send a template instead."""
+    """The channel's window for free-form messages has closed: send a template instead, where the
+    channel has templates (WhatsApp); on Instagram, wait for the person to write."""
 
 
 class NotFoundError(Exception):
@@ -236,7 +234,7 @@ def send(
     ).first()
     if last is None:
         raise NotFoundError("no message from them in this conversation")
-    window = WINDOWS.get(last.channel)
+    window = runtime.rules.of(last.channel).reply_window  # the channel's rules, meydan/rules.py
     if window is not None and conn.scalar(select(func.now())) - last.received_at > window:
         raise WindowClosedError(f"{last.channel}: more than {window} since their last message")
     turn = runtime.enqueue(

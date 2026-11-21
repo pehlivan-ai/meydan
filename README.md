@@ -50,7 +50,7 @@ today. The planner is on the [roadmap](#roadmap).
   <tr>
     <td align="center" width="96"><img src="docs/assets/readme/mod-channels.webp" width="80" alt=""></td>
     <td>You talk to it by message, as to a friend.</td>
-    <td>a <b>channel</b><br><sub>WhatsApp, Telegram</sub></td>
+    <td>a <b>channel</b><br><sub>WhatsApp, Telegram, Instagram</sub></td>
   </tr>
   <tr>
     <td align="center" width="96"><img src="docs/assets/readme/mod-runtime.webp" width="80" alt=""></td>
@@ -114,7 +114,7 @@ are in Postgres, so the app needs no message broker and no cache.
 <table>
   <tr>
     <td align="center" width="33%"><img src="docs/assets/readme/mod-runtime.webp" width="112" alt=""><br><b><code>meydan.runtime</code></b><br><sub>Inbox → worker → outbox → sender, and who wrote, on Postgres</sub><br><sub>✅ available</sub></td>
-    <td align="center" width="33%"><img src="docs/assets/readme/mod-channels.webp" width="112" alt=""><br><b><code>meydan.channels</code></b><br><sub>WhatsApp Cloud API and Telegram: messages in, replies out</sub><br><sub>✅ available</sub></td>
+    <td align="center" width="33%"><img src="docs/assets/readme/mod-channels.webp" width="112" alt=""><br><b><code>meydan.channels</code></b><br><sub>WhatsApp Cloud API, Telegram and Instagram: messages in, replies out</sub><br><sub>✅ available</sub></td>
     <td align="center" width="33%"><img src="docs/assets/readme/mod-llm.webp" width="112" alt=""><br><b><code>meydan.llm</code></b><br><sub>Models from spec strings, fallback, backpressure, retries</sub><br><sub>✅ available</sub></td>
   </tr>
   <tr>
@@ -129,6 +129,7 @@ are in Postgres, so the app needs no message broker and no cache.
 | `meydan.runtime` | Stores each message once (idempotent on its id) and finds who wrote it. Runs one turn per conversation at a time. Paces and delivers replies, retries with backoff, and stops with the reason. | [identity](docs/identity.md), [routing](docs/routing.md), [presence](docs/presence.md), [failures](docs/failures.md) | available |
 | `meydan.channels.whatsapp` | WhatsApp Cloud API. Checks the signature, reads webhooks, sends text, templates, map pins, choices, contact cards and images from the number that the person wrote to. | [bring-up](docs/bring-up.md) | available |
 | `meydan.channels.telegram` | Telegram Bot API. Bots as endpoints, long polling, text and inline buttons. | [telegram](docs/telegram.md) | available |
+| `meydan.channels.instagram` | Instagram direct messages to a professional account: text, quick replies, reads. The person writes first, and there are no templates. | [instagram](docs/instagram.md) | available |
 | `meydan.channels.email` | DNS checks for your own mail addresses (MX, SPF, DKIM, DMARC). | [endpoints](docs/endpoints.md) | available |
 | `meydan.runtime.templates` | Keeps the state of each message template (review, pause, category, quality). The sender sends, holds or stops by that state. | [templates](docs/templates.md) | available |
 | `meydan.runtime.expect` | Asks with buttons and waits for the answer (invites, confirmations). Checks who pressed, and when. | [expect](docs/expect.md) | available |
