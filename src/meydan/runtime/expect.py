@@ -259,7 +259,7 @@ class Expectations:
         self.handlers = handlers
         self.replies = replies or Replies()  # when the kind is unknown
         if payload_of is None:  # the channel says where a pressed button's payload is
-            from meydan.channels.whatsapp import reply_payload as payload_of
+            from meydan.channels.base import reply_payload as payload_of
         self.payload_of = payload_of
 
     def intercept(self, conn: Connection, message: Inbound, routed: Routed) -> Intercepted | None:

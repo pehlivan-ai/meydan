@@ -6,6 +6,32 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.37.0] - 2026-11-22
+### Added
+- `meydan.channels.instagram`: direct messages to an Instagram professional account (Instagram
+  API). `parse_messages` (text, quick-reply taps as kind `button`,
+  attachments, replies; echoes, deletions and reactions skipped), `parse_statuses` (reads),
+  `Instagram.send` (text, choices as quick replies, a location or a contact card as text;
+  templates and images refused with the reason; a text over 1000 bytes goes as several messages,
+  cut where a line ends). Unified Login by default (graph.facebook.com, a system user token);
+  `host=INSTAGRAM_LOGIN` for the older setup. Addresses `ig:` (our account) and `igsid:`
+  (a person, scoped to our account). docs/instagram.md.
+- `meydan.rules`: `INSTAGRAM` (24-hour window, 1000 bytes, reads) and `text_bytes_max` for a
+  channel that counts bytes.
+- `ReplyStyle.max_bytes`: an agent's bubbles fit a channel that counts bytes; the model is told
+  to say it shorter instead of the send failing.
+- `meydan.channels.meta.verify_signature`: Meta's webhook signature, shared by WhatsApp and
+  Instagram.
+### Changed
+- `meydan.operator` reads a channel's reply window from `meydan.rules` (`runtime.rules`); its own
+  copy (`WINDOWS`, WhatsApp only) is gone, so a person on the team can't write into a closed
+  Instagram window either.
+- `reply_payload` lives in `meydan.channels.base`: a tap's payload is channel-neutral, and
+  `expect` and `auth` no longer import from the WhatsApp adapter.
+### Upgrading
+- Nothing to migrate. `meydan.channels.whatsapp.reply_payload` and `.verify_signature` still
+  import from the old place.
+
 ## [0.36.0] - 2026-11-20
 ### Added
 - Tool feedback, the result half of the agent-computer interface (docs/tools.md):

@@ -11,6 +11,7 @@ from pydantic_ai.models.function import AgentInfo, FunctionModel
 
 from meydan.channels.base import Outbound
 from meydan.reply import Reply, ReplyStyle
+from meydan.rules import DEFAULT
 
 
 def test_bubbles_become_text_messages_in_order():
@@ -77,6 +78,13 @@ def test_problems_work_on_plain_strings():
     assert style.problems(["tamam"]) == []
     [problem] = style.problems(["çok uzun"])
     assert problem.startswith("Bubble 1 is 8 characters; at most 5")
+
+
+def test_a_channel_that_counts_bytes_gets_bubbles_that_fit_in_bytes():
+    style = ReplyStyle(max_chars=None, max_bytes=DEFAULT.of("instagram").text_bytes_max)
+    assert style.problems(["ş" * 500]) == []  # 1000 bytes
+    [problem] = style.problems(["ş" * 501])
+    assert problem.startswith("Bubble 1 is too long for this channel (1002 bytes; at most 1000)")
 
 
 def test_a_style_with_impossible_numbers_is_refused():
