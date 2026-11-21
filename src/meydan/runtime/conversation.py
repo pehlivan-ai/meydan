@@ -43,7 +43,13 @@ def transcript(
     ).all()
     lines = [(at, id_, Said(at, "in", who, text or "")) for at, id_, who, text in ins]
     lines += [
-        (at, id_, Said(at, "out", who, (msg or {}).get("text") or "", turn))
+        # What an agent reads of our own message: its `recall` if it has one, else its text. The
+        # row keeps the real message for the people allowed to see it (meydan.observe).
+        (
+            at,
+            id_,
+            Said(at, "out", who, (msg or {}).get("recall") or (msg or {}).get("text") or "", turn),
+        )  # fmt: skip
         for at, id_, who, msg, turn in outs
     ]
     return [said for _, _, said in sorted(lines, key=lambda x: (x[0], x[1]))[-limit:]]

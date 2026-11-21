@@ -153,6 +153,13 @@ class Outbound:
     # An image: the file's key in meydan.media and an optional caption under it.
     media: str | None = None
     caption: str | None = None
+    # What an agent reads of this message later, in its history, instead of `text`: the person
+    # and anyone allowed to see the conversation get the real message (meydan.observe), the model
+    # a line like "[timetable: 23 Nov, 4 lessons]" (docs/privacy.md). Left out: `text`.
+    recall: str | None = None
+    # Sent in this message's place if it cannot be delivered (refused for good, or reported failed
+    # later); forgotten once it is delivered (docs/failures.md, "When a message cannot go").
+    fallback: "Outbound | None" = field(default=None, compare=False)
     # Filled by the sender when the message leaves, never stored: the channel's id for the file
     # (WhatsApp) or its bytes and type (a channel that takes the file itself).
     channel_media_id: str | None = field(default=None, compare=False, repr=False)
@@ -160,8 +167,17 @@ class Outbound:
     media_mime: str | None = field(default=None, compare=False, repr=False)
 
     @classmethod
-    def text_message(cls, text: str, *, ref: str | None = None) -> "Outbound":
-        return cls(kind="text", text=text, ref=ref)
+    def text_message(
+        cls,
+        text: str,
+        *,
+        ref: str | None = None,
+        recall: str | None = None,
+        fallback: "Outbound | None" = None,
+    ) -> "Outbound":
+        """Text. `recall`: what an agent reads of it later instead of the text itself.
+        `fallback`: sent instead if it cannot be delivered."""
+        return cls(kind="text", text=text, ref=ref, recall=recall, fallback=fallback)
 
     @classmethod
     def template_message(
@@ -173,6 +189,8 @@ class Outbound:
         buttons: tuple[str, ...] = (),
         ref: str | None = None,
         media: str | None = None,
+        recall: str | None = None,
+        fallback: "Outbound | None" = None,
         **params: str,
     ) -> "Outbound":
         """An approved template. `params` fill its body: by name (`name="Ada"`) for a template
@@ -187,6 +205,8 @@ class Outbound:
             buttons=buttons,
             ref=ref,
             media=media,
+            recall=recall,
+            fallback=fallback,
         )
 
     @classmethod
@@ -271,14 +291,18 @@ class Outbound:
         caption: str | None = None,
         alt: str | None = None,
         ref: str | None = None,
+        fallback: "Outbound | None" = None,
     ) -> "Outbound":
         """An image, by its key in meydan.media (`media.put`): it arrives like a photo someone
         sent. `caption` is shown under it; `alt` only says in transcripts what it was (e.g.
-        "Spring Cup poster"), so an agent reading the conversation knows it went out."""
+        "Spring Cup poster"), so an agent reading the conversation knows it went out.
+        `fallback`: sent instead if the image cannot be delivered (a text saying the same)."""
         if not media:
             raise ValueError("an image needs a media key (meydan.media.put)")
         text = "\n".join(x for x in (f"[image: {alt}]" if alt else "[image]", caption) if x)
-        return cls(kind="image", text=text, media=media, caption=caption, ref=ref)
+        return cls(
+            kind="image", text=text, media=media, caption=caption, ref=ref, fallback=fallback
+        )
 
     def to_payload(self) -> dict[str, Any]:
         return {
@@ -305,6 +329,8 @@ class Outbound:
             "contact_title": self.contact_title,
             "media": self.media,
             "caption": self.caption,
+            "recall": self.recall,
+            "fallback": self.fallback.to_payload() if self.fallback else None,
         }
 
     @classmethod
@@ -314,6 +340,7 @@ class Outbound:
                 **data,
                 "buttons": tuple(data.get("buttons") or ()),
                 "choices": tuple(Choice(**c) for c in data.get("choices") or ()),
+                "fallback": cls.from_payload(data["fallback"]) if data.get("fallback") else None,
             }
         )
 

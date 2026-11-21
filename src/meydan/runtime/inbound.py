@@ -149,3 +149,12 @@ class Receiver(_Part):
             )
         if s.status == "read":
             conn.execute(update(o).where(mine, o.c.read_at.is_(None)).values(read_at=s.at))
+        # A message that is known to have arrived needs no fallback any more; one reported failed
+        # after it left goes out as its fallback (meydan.runtime.outbound).
+        from meydan.runtime.outbound import forget_fallback, queue_fallback
+
+        if s.status in ("delivered", "read"):
+            forget_fallback(conn, self.t, mine)
+        elif s.status == "failed":
+            for row in conn.execute(select(o).where(mine, o.c.status == "failed")).mappings():
+                queue_fallback(conn, self.t, dict(row))

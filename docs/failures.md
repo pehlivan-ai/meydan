@@ -63,3 +63,21 @@ runtime = Runtime(..., on_delay=late, on_failure=gave_up)
 
 Telling someone inside (an operator, the owner) is not a hook: every failure is written down
 (`inbox.error`, the turn record) and `meydan.observe` reads it (`problems`).
+
+## When a message cannot go
+
+A turn that succeeded can still fail to reach the person: the channel refuses the message for
+good (a WhatsApp 4xx that is not a rate limit, a file it won't take), or takes it and reports it
+`failed` later (a receipt: an image it could not process, say). Retries are the sender's: rate
+limits and server errors are tried again after a wait; anything else is a dead letter, written
+down (`outbox.last_error`) and seen in `meydan.observe`.
+
+What the person gets instead is the message's `fallback`, if it has one:
+
+```python
+Outbound.image_message(key, fallback=Outbound.text_message("The same, in words."))
+```
+
+It is queued in the message's place, as the next thing in the conversation, once: when the
+message dies, or when a `failed` receipt arrives for it. It is dropped once the message is
+delivered. A message without a fallback that cannot go is told to nobody, as before.
