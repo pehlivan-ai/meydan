@@ -436,3 +436,80 @@ def test_the_command_line_sends_like_the_other_side_would(db, monkeypatch, capsy
     br.drain()
     assert seen == [{"ref": "r9"}]
     assert main(["secret"]) == 0 and capsys.readouterr().out.startswith("whsec_")
+
+
+# --- managing connections over HTTP (meydan.bridge.manage) ---
+
+
+def test_managing_a_connection_is_what_the_app_allows(db):
+    from meydan.auth import AuthConfig, issue_service_key
+    from meydan.auth.web import Auth
+    from meydan.bridge import connections as cx
+    from meydan.bridge.manage import routes as manage_routes
+
+    engine, t = db
+    kr = keyring()
+    with engine.begin() as c:
+        cx.ensure(c, t, "acme")
+        cx.ensure(c, t, "zeta")
+        _, viewer = issue_service_key(c, t, "viewer", set(), audience="dev")
+        _, admin = issue_service_key(c, t, "admin", set(), audience="dev")
+        names = dict(c.execute(select(t.actors.c.name, t.actors.c.id)).all())
+    # the app's rule: the viewer reads acme; the admin manages acme; nobody sees zeta
+    rules = {(names["viewer"], "read"), (names["admin"], "read"), (names["admin"], "manage")}
+    done = []
+
+    def may(person, name, action):
+        return name == "acme" and (person.actor_id, action) in rules
+
+    def audit(conn, person, action, name):
+        done.append((action, name))
+
+    br = make(db, {("acme", "payment.succeeded"): lambda c, e: None}, secrets={}, keyring=kr)
+    auth = Auth(engine, t, AuthConfig(audience="dev"), secure_cookies=False)
+    app = FastAPI()
+    app.include_router(
+        manage_routes(br, auth, may=may, audit=audit, reveal=True), prefix="/connections"
+    )
+    client = TestClient(app)
+    closed = FastAPI()  # the default: a stored secret is never shown again
+    closed.include_router(manage_routes(br, auth, may=may, audit=audit), prefix="/connections")
+    as_ = lambda key: {"Authorization": f"Bearer {key}"}  # noqa: E731 (a short alias)
+
+    assert [c["name"] for c in client.get("/connections", headers=as_(viewer)).json()] == ["acme"]
+    assert client.get("/connections/zeta", headers=as_(admin)).status_code == 404  # names private
+    # reading is not managing
+    assert client.post("/connections/acme/secrets", json={}, headers=as_(viewer)).status_code == 404
+    made = client.post("/connections/acme/secrets", json={}, headers=as_(admin)).json()
+    assert made["secret"].startswith("whsec_")
+    view = client.get("/connections/acme", headers=as_(viewer)).json()
+    assert "secret" not in str(view) and view["credentials"][0]["origin"] == "ours"
+    cid = view["credentials"][0]["id"]
+    shut = TestClient(closed).post(
+        f"/connections/acme/credentials/{cid}/reveal", headers=as_(admin)
+    )
+    assert shut.status_code == 404
+    assert client.post(f"/connections/acme/credentials/{cid}/reveal",
+                       headers=as_(admin)).json()["secret"] == made["secret"]  # fmt: skip
+
+    # the other side signs wrong once, then right: they see the refusal and the event
+    wire = make_app_for(br)
+    b = body(ref="r1")
+    assert wire.post("/connections/acme/webhooks", content=b,
+                     headers=headers(OTHER, b)).status_code == 401  # fmt: skip
+    assert wire.post("/connections/acme/webhooks", content=b,
+                     headers=headers(made["secret"], b)).status_code == 200  # fmt: skip
+    refused = client.get("/connections/acme/rejections", headers=as_(viewer)).json()
+    assert [(r["status"], r["reason"]) for r in refused] == [(401, "bad signature")]
+    assert client.get("/connections/acme/events", headers=as_(viewer)).json()[0]["type"] == (
+        "payment.succeeded"
+    )
+    off = client.post("/connections/acme/status", json={"on": False}, headers=as_(admin)).json()
+    assert off["status"] == "off"
+    assert done == [("secret:ours", "acme"), ("reveal", "acme"), ("off", "acme")]
+
+
+def make_app_for(br) -> TestClient:
+    app = FastAPI()
+    app.include_router(bridge_routes(br), prefix="/connections")
+    return TestClient(app)

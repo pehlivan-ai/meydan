@@ -38,6 +38,7 @@ def routes(bridge: Bridge, *, max_body: int = MAX_BODY) -> APIRouter:
         try:
             got = await run_in_threadpool(store)
         except RejectedError as e:
+            await run_in_threadpool(bridge.note_rejection, connection, e, head)
             raise HTTPException(e.status, e.reason) from None
         return Ack(duplicate=got.duplicate)
 

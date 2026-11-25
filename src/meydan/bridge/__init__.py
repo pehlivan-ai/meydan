@@ -36,7 +36,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Connection, Engine, func, select, update
+from sqlalchemy import Connection, Engine, delete, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from meydan.runtime.tables import RuntimeTables
@@ -367,6 +367,30 @@ class Bridge:
 
         return connections.credentials(conn, self.t, self.keyring, connection)
 
+    def note_rejection(
+        self, connection: str, error: "RejectedError", head: Mapping[str, str]
+    ) -> None:
+        """Keep why a known connection's request was refused (its own transaction: the request's
+        rolled back), so the other side can see it while setting up. Unknown names are not kept
+        (anyone can send those)."""
+        if error.status == 404:
+            return
+        r = self.t.bridge_rejections
+        h = {k.lower(): v for k, v in head.items()}
+        with self.engine.begin() as conn:
+            conn.execute(
+                insert(r).values(
+                    connection=connection, status=error.status, reason=error.reason[:200],
+                    webhook_id=(h.get("webhook-id") or "")[:ID_MAX] or None,
+                )
+            )  # fmt: skip
+
+    def prune(self, keep: timedelta = timedelta(days=30)) -> int:
+        """Forget rejections older than `keep` (the run loop calls it hourly)."""
+        r = self.t.bridge_rejections
+        with self.engine.begin() as conn:
+            return conn.execute(delete(r).where(r.c.at < func.now() - keep)).rowcount
+
     # --- the worker ---
 
     def drain(self, limit: int = 50) -> int:
@@ -428,10 +452,14 @@ class Bridge:
         return True
 
     async def run(self, every: float = 1.0) -> None:
-        """Drain forever (cancel the task to stop)."""
+        """Drain forever, and prune old rejections hourly (cancel the task to stop)."""
+        pruned_at = 0.0
         while True:
             try:
                 await asyncio.to_thread(self.drain)
+                if time.monotonic() - pruned_at > 3600:
+                    await asyncio.to_thread(self.prune)
+                    pruned_at = time.monotonic()
             except Exception:
                 log.exception("bridge: drain failed")
             await asyncio.sleep(every)
