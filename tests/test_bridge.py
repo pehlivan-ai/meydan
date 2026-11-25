@@ -2,6 +2,7 @@
 app's handler in a worker (retry, dead letter), and expectations completed by such an event.
 Real Postgres (see conftest). Fake names and ids only: this is a public repository."""
 
+import base64
 import json
 import time
 from datetime import timedelta
@@ -26,7 +27,8 @@ def body(kind="payment.succeeded", **data) -> bytes:
 
 def make(db, handlers=None, secrets=None, **kw) -> Bridge:
     engine, t = db
-    return Bridge(engine, t, secrets=secrets or {"acme": SECRET}, handlers=handlers or {}, **kw)
+    secrets = {"acme": SECRET} if secrets is None else secrets
+    return Bridge(engine, t, secrets=secrets, handlers=handlers or {}, **kw)
 
 
 def events(db):
@@ -180,7 +182,7 @@ def test_a_failing_handler_writes_nothing_waits_then_gives_up(db):
 
     def boom(conn, event):
         conn.execute(insert(t.actors).values(kind="person"))  # must be rolled back
-        raise RuntimeError("partner said nonsense")
+        raise RuntimeError("the other side said nonsense")
 
     br = make(db, {("acme", "payment.succeeded"): boom}, attempts=3)
     b = body()
@@ -227,18 +229,18 @@ def test_the_http_door(db):
     seen = []
     br = make(db, {("acme", "payment.succeeded"): lambda c, e: seen.append(e.event_id)})
     app = FastAPI()
-    app.include_router(bridge_routes(br, max_body=1024), prefix="/partners")
+    app.include_router(bridge_routes(br, max_body=1024), prefix="/connections")
     client = TestClient(app)
     b = body(ref="r1")
     h = headers(SECRET, b, event_id="evt_9")
-    r = client.post("/partners/acme/webhooks", content=b, headers=h)
+    r = client.post("/connections/acme/webhooks", content=b, headers=h)
     assert r.status_code == 200 and r.json() == {"received": True, "duplicate": False}
-    r = client.post("/partners/acme/webhooks", content=b, headers=h)
+    r = client.post("/connections/acme/webhooks", content=b, headers=h)
     assert r.status_code == 200 and r.json()["duplicate"] is True
-    assert client.post("/partners/acme/webhooks", content=b + b" ", headers=h).status_code == 401
-    assert client.post("/partners/nobody/webhooks", content=b, headers=h).status_code == 404
+    assert client.post("/connections/acme/webhooks", content=b + b" ", headers=h).status_code == 401
+    assert client.post("/connections/nobody/webhooks", content=b, headers=h).status_code == 404
     big = body(pad="x" * 2000)
-    assert client.post("/partners/acme/webhooks", content=big,
+    assert client.post("/connections/acme/webhooks", content=big,
                        headers=headers(SECRET, big)).status_code == 413  # fmt: skip
     br.drain()
     assert seen == ["evt_9"]
@@ -289,3 +291,148 @@ def test_completing_refuses(db, setup, kind, answer, reason):
     with engine.begin() as c, pytest.raises(NotCompletedError) as e:
         complete(c, t, token, kind=kind, answer=answer)
     assert e.value.reason == reason
+
+
+# --- v2a: public-key signatures (Standard Webhooks' asymmetric scheme) ---
+
+SPEC_V2A = {  # the spec's own example
+    "signing_key": "whsk_4uKPjji/dhB8w6GW3YYDnIMYvXcdHrvH6lidTr4Z+EY=",
+    "public_key": "whpk_uWKK13PfwqyOgrqT0OrWKcS2uVD7e89+oUKnkoPjx7w=",
+    "endpoint_id": "ep_2fVZdC8Kx9TR4ZoCqHWt3NnLgRb",
+    "event_id": "msg_2KWPBgLlAfxdpx2AI54pPJ85f4W",
+    "at": 1674087231,
+    "body": b'{"type":"contact.created","timestamp":"2022-11-03T20:26:10.344522Z",'
+    b'"data":{"id":"1f81eb52-5198-4599-803e-771906343485"}}',
+    "signature": "v2a,kG9XaxZjAEpKB8KeQQb5G1Xp73YH5Rf5gxoWe7cg1kYMiyspdtZXe9w+dAwKeOurAwxfqml"
+    "OG/QR4m9s37DzAg==",
+}
+
+
+def test_the_spec_reference_v2a_signature():
+    v = SPEC_V2A
+    got = bridge.sign_v2a(v["signing_key"], v["endpoint_id"], v["event_id"], v["at"], v["body"])
+    assert got == v["signature"]
+    h = {"webhook-id": v["event_id"], "webhook-timestamp": str(v["at"]),
+         "webhook-signature": v["signature"]}  # fmt: skip
+    creds = bridge.Credentials(public_keys=(v["public_key"],), endpoint_id=v["endpoint_id"])
+    assert verify(creds, h, v["body"], now=v["at"])[0] == v["event_id"]
+
+
+def test_v2a_is_checked_against_the_endpoint_id_and_the_key():
+    sk, pk = bridge.new_keypair()
+    _, other = bridge.new_keypair()
+    b = body()
+    h = headers(None, b, signing_key=sk, endpoint_id="ep_1")
+    assert verify(bridge.Credentials(public_keys=(other, pk), endpoint_id="ep_1"), h, b)
+    for creds in (
+        bridge.Credentials(public_keys=(pk,), endpoint_id="ep_2"),  # signed for another endpoint
+        bridge.Credentials(public_keys=(other,), endpoint_id="ep_1"),  # another key
+        bridge.Credentials(secrets=(SECRET,)),  # we only know a shared secret
+    ):
+        with pytest.raises(RejectedError):
+            verify(creds, h, b)
+    # both versions in one header: either credential is enough
+    h2 = headers(SECRET, b, signing_key=sk, endpoint_id="ep_1")
+    assert verify(bridge.Credentials(secrets=(SECRET,)), h2, b)
+    assert verify(bridge.Credentials(public_keys=(pk,), endpoint_id="ep_1"), h2, b)
+
+
+# --- connections in the database ---
+
+
+def keyring():
+    from meydan.vault import Keyring
+
+    return Keyring({"k1": Keyring.new_key()}, current="k1")
+
+
+def test_credentials_ours_and_theirs_from_the_table(db):
+    from meydan.bridge import connections as cx
+
+    engine, t = db
+    kr = keyring()
+    sk, pk = bridge.new_keypair()
+    with engine.begin() as c:
+        cx.ensure(c, t, "acme")
+        ours = cx.generate_secret(c, t, kr, "acme", by="tester")
+        cx.add_public_key(c, t, kr, "acme", pk, endpoint_id="ep_acme")
+        cx.ensure(c, t, "zeta")
+        cx.add_secret(c, t, kr, "zeta", OTHER)
+    br = make(db, {("acme", "payment.succeeded"): lambda c, e: None}, secrets={}, keyring=kr)
+    b = body()
+    with engine.begin() as c:
+        assert not br.receive(c, "acme", headers(ours, b), b).duplicate  # v1, our secret
+        assert not br.receive(c, "acme", headers(None, b, signing_key=sk, endpoint_id="ep_acme"),
+                              b).duplicate  # fmt: skip
+        assert not br.receive(c, "zeta", headers(OTHER, b), b).duplicate  # v1, their secret
+        with pytest.raises(RejectedError):
+            br.receive(c, "zeta", headers(ours, b), b)  # acme's secret does not speak for zeta
+    with engine.connect() as c:
+        info = cx.listing(c, t, "acme")
+        sealed = c.execute(select(t.connection_credentials.c.sealed)).scalars().all()
+    assert {(i.kind, i.origin) for i in info} == {("whsec", "ours"), ("whpk", "theirs")}
+    assert all(ours not in s and OTHER not in s for s in sealed)  # never in the clear
+
+
+def test_rotation_keeps_the_old_secret_for_the_overlap_then_off_turns_it_all_off(db):
+    from meydan.bridge import connections as cx
+
+    engine, t = db
+    kr = keyring()
+    with engine.begin() as c:
+        cx.ensure(c, t, "acme")
+        old = cx.generate_secret(c, t, kr, "acme")
+        new = cx.rotate(c, t, kr, "acme", overlap=timedelta(days=7))
+        assert set(cx.credentials(c, t, kr, "acme").secrets) == {old, new}
+        cx.rotate(c, t, kr, "acme", overlap=timedelta())  # the old ones end now
+        assert len(cx.credentials(c, t, kr, "acme").secrets) == 1
+        cx.set_status(c, t, "acme", on=False)
+        assert cx.credentials(c, t, kr, "acme") is None
+    br = make(db, secrets={}, keyring=kr)
+    b = body()
+    with engine.begin() as c, pytest.raises(RejectedError) as e:
+        br.receive(c, "acme", headers(new, b), b)
+    assert e.value.status == 404
+
+
+def test_a_public_key_needs_an_endpoint_id_and_reseal_moves_to_the_new_key(db):
+    from meydan.bridge import connections as cx
+    from meydan.vault import Keyring
+
+    engine, t = db
+    k1 = Keyring.new_key()
+    kr = Keyring({"k1": k1}, current="k1")
+    _, pk = bridge.new_keypair()
+    with engine.begin() as c:
+        cx.ensure(c, t, "acme")
+        with pytest.raises(ValueError):
+            cx.add_public_key(c, t, kr, "acme", pk)
+        secret = cx.generate_secret(c, t, kr, "acme")
+    kr2 = Keyring({"k2": Keyring.new_key(), "k1": k1}, current="k2")
+    with engine.begin() as c:
+        assert cx.reseal(c, t, kr2) == 1
+    only_new = Keyring({"k2": base64.b64encode(kr2.keys["k2"]).decode()}, current="k2")
+    with engine.connect() as c:
+        assert cx.credentials(c, t, only_new, "acme").secrets == (secret,)
+
+
+def test_the_command_line_sends_like_the_other_side_would(db, monkeypatch, capsys):
+    import httpx
+
+    from meydan.bridge.__main__ import main
+
+    seen = []
+    br = make(db, {("acme", "payment.succeeded"): lambda c, e: seen.append(e.data)})
+    app = FastAPI()
+    app.include_router(bridge_routes(br), prefix="/connections")
+    client = TestClient(app)
+    monkeypatch.setattr(httpx, "post", lambda url, **kw: client.post(
+        url.removeprefix("http://test"), content=kw["content"], headers=kw["headers"]))  # fmt: skip
+    monkeypatch.setenv("MEYDAN_BRIDGE_SECRET", SECRET)
+    args = ["send", "http://test/connections/acme/webhooks", "--type", "payment.succeeded",
+            "--data", '{"ref": "r9"}']  # fmt: skip
+    assert main(args) == 0
+    assert capsys.readouterr().out.startswith("200 ")
+    br.drain()
+    assert seen == [{"ref": "r9"}]
+    assert main(["secret"]) == 0 and capsys.readouterr().out.startswith("whsec_")

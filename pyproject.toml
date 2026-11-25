@@ -1,6 +1,6 @@
 [project]
 name = "meydan"
-version = "0.40.0"
+version = "0.41.0"
 description = "Primitives for running instances of personal and planning agents that coordinate people, one-to-one and in groups."
 readme = "README.md"
 license = "Apache-2.0"
@@ -23,6 +23,11 @@ runtime = [
     "httpx>=0.28",
     "sqlalchemy>=2.1",
     "psycopg[binary]>=3.2",
+]
+# Bridges' stronger credentials: secrets sealed at rest (meydan.vault, AES-GCM) and public-key
+# signatures (Standard Webhooks v2a, ed25519). Shared-secret (v1) bridges work without it.
+bridge = [
+    "cryptography>=43",
 ]
 # HTTP surface: sign-in, sessions and scopes as FastAPI routes and dependencies (meydan.auth.web).
 api = [

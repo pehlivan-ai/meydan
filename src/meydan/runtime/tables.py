@@ -59,6 +59,11 @@ COST_SOURCES = ("provider", "estimate", "mixed")
 # pending: to be handled; done: handled; ignored: no handler for its type (kept, visible);
 # dead: a handler refused it for good, or it failed too often (docs/bridges.md).
 BRIDGE_EVENT_STATUSES = ("pending", "done", "ignored", "dead")
+CONNECTION_STATUSES = ("on", "off")
+# whsec: a shared secret (Standard Webhooks v1); whpk: their public key (v2a, ed25519).
+CREDENTIAL_KINDS = ("whsec", "whpk")
+# ours: we generated it and handed it over; theirs: they generated it and gave it to us.
+CREDENTIAL_ORIGINS = ("ours", "theirs")
 
 
 @dataclass(frozen=True)
@@ -90,6 +95,8 @@ class RuntimeTables:
     media_blobs: Table
     media_uploads: Table
     bridge_events: Table
+    connections: Table
+    connection_credentials: Table
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -644,6 +651,44 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         postgresql_where=bridge_events.c.status == "pending",
     )
 
+    # Connections (meydan.bridge.connections): outside systems linked to the instance, by the
+    # app's name for them, and how each proves itself. Secrets are sealed (meydan.vault), never
+    # stored in the clear; `fingerprint` shows which one is which without revealing it.
+    connections = Table(
+        f"{prefix}connections",
+        metadata,
+        Column("name", String(64), primary_key=True),
+        Column("status", String(8), nullable=False, server_default="on"),
+        # v2a: the id the sender gave to our endpoint (it is part of what they sign).
+        Column("endpoint_id", String(64)),
+        Column("note", Text),
+        now_col("created_at"),
+        now_col("updated_at"),
+        CheckConstraint(_in("status", CONNECTION_STATUSES), name="status"),
+    )
+    connection_credentials = Table(
+        f"{prefix}connection_credentials",
+        metadata,
+        id_col(),
+        Column(
+            "connection",
+            String(64),
+            ForeignKey(f"{prefix}connections.name", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        Column("kind", String(8), nullable=False),
+        Column("origin", String(8), nullable=False),
+        Column("sealed", Text, nullable=False),
+        Column("fingerprint", String(16), nullable=False),
+        now_col("valid_from"),
+        Column("valid_until", DateTime(timezone=True)),  # None: until retired
+        Column("created_by", String(200)),  # a principal as text
+        now_col("created_at"),
+        CheckConstraint(_in("kind", CREDENTIAL_KINDS), name="kind"),
+        CheckConstraint(_in("origin", CREDENTIAL_ORIGINS), name="origin"),
+    )
+    Index(f"ix_{prefix}connection_credentials_connection", connection_credentials.c.connection)
+
     return RuntimeTables(
         actors=actors,
         identities=identities,
@@ -672,4 +717,6 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         media_blobs=media_blobs,
         media_uploads=media_uploads,
         bridge_events=bridge_events,
+        connections=connections,
+        connection_credentials=connection_credentials,
     )

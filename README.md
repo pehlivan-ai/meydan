@@ -147,7 +147,8 @@ are in Postgres, so the app needs no message broker and no cache.
 | `meydan.operator` | A person on the team takes over a conversation, writes as themselves, and gives it back. | [operator](docs/operator.md) | available (`api`) |
 | `meydan.notify` | Web Push notifications to the team's own devices. | [notify](docs/notify.md) | available (`notify`) |
 | `meydan.booking` | An optional primitive for apps that book time: holds, confirmations, no overlaps, a waiting list. | [booking](docs/booking.md) | available |
-| `meydan.bridge` | Events from outside systems (a partner, a payment provider): signed with Standard Webhooks, stored once, handled by your code in a worker with retries. An event can complete an expectation (a reference in a link). | [bridges](docs/bridges.md) | available (`runtime`, routes `api`) |
+| `meydan.bridge` | Events from outside systems (a stakeholder's software, a payment provider): signed with Standard Webhooks (shared secret or public key), stored once, handled by your code in a worker with retries. Connections and their credentials (ours or theirs, rotating) in the database. An event can complete an expectation (a reference in a link). `python -m meydan.bridge send` plays the other side. | [bridges](docs/bridges.md) | available (`runtime`, `bridge`, routes `api`) |
+| `meydan.vault` | Secrets sealed at rest (AES-256-GCM), keys that rotate. | `meydan.vault` docstring | available (`bridge`) |
 | `meydan.eval` | Scenarios for an agent, on Pydantic Evals. | `meydan.eval` docstring | available |
 | `templates/instance` | A small working app with its Compose stack, CI/CD and a deploy by digest with rollback. | [getting-started](docs/getting-started.md) | available |
 | planning | Plan state machine, group consensus, matching, waiting list and backfill. | [architecture](docs/architecture.md) | planned |
@@ -265,7 +266,7 @@ Each recipe is a few lines in your app. The docs have the code.
 |---|---|---|
 | sign in people with a code that they send from WhatsApp, or that WhatsApp sends to them | `meydan.auth` | [auth](docs/auth.md) |
 | ask with buttons and act on the answer once (an invite, a confirmation) | `meydan.runtime.expect` | [expect](docs/expect.md) |
-| take events from a partner's system (a payment made) and tie them to what you asked for | `meydan.bridge`, `expect.complete` | [bridges](docs/bridges.md) |
+| take events from an outside system (a payment made) and tie them to what you asked for | `meydan.bridge`, `expect.complete` | [bridges](docs/bridges.md) |
 | see how far each message got: delivered, seen, answered | `meydan.observe` | [observe](docs/observe.md#engagement-one-ordinal-scale-since-v012) |
 | bring in a second WhatsApp number and watch its health | `python -m meydan.cli numbers` | [endpoints](docs/endpoints.md) |
 | send a map pin, a photo, a contact card or choices after the bubbles | `meydan.reply` attachments | [reply](docs/reply.md#attachments-what-goes-after-the-bubbles) |
