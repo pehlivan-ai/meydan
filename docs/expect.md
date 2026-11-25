@@ -39,6 +39,14 @@ Button payloads are `expect:<token>:<option>`; only the token's hash is stored.
 5. The sender owns the identity it was asked of (`Replies.not_yours`).
 6. The option is one of its options.
 
+## Completed from outside a conversation
+`complete(conn, tables, token, kind=, answer=, by=, evidence=)`: an event from an outside system
+carries the token it was given (a reference in a payment link) and completes the expectation,
+once, with the same states and checks as a button answer (known token of this kind, pending, in
+time, one of its options). `evidence` (the event's id) is kept in its data. A late one raises and
+is closed by the sweep, which runs `on_close`. Raises `NotCompletedError(reason)`. See
+docs/bridges.md.
+
 ## Not here (yet)
 - Groups (first N of many, backfill): an Aggregator over several asks, with the planner.
 - Sign-in codes (text, no outbound message) moving onto `expect`: next.

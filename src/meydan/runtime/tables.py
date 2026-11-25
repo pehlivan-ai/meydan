@@ -56,6 +56,9 @@ PARTICIPANT_ROLES = ("self", "peer", "observer")
 TURN_STATUSES = ("replied", "failed", "gave_up")
 DELIVERY_STATUSES = ("pending", "sent", "gone", "failed")
 COST_SOURCES = ("provider", "estimate", "mixed")
+# pending: to be handled; done: handled; ignored: no handler for its type (kept, visible);
+# dead: a handler refused it for good, or it failed too often (docs/bridges.md).
+BRIDGE_EVENT_STATUSES = ("pending", "done", "ignored", "dead")
 
 
 @dataclass(frozen=True)
@@ -86,6 +89,7 @@ class RuntimeTables:
     media: Table
     media_blobs: Table
     media_uploads: Table
+    bridge_events: Table
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -613,6 +617,33 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         PrimaryKeyConstraint("media_key", "channel", "from_number"),
     )  # fmt: skip
 
+    # Bridges (meydan.bridge): facts an outside system tells us, stored once before we answer,
+    # then handled by a worker. `connection` is the app's name for that system; `event_id` is
+    # the sender's id for the event (unique per connection: a repeat is stored once).
+    bridge_events = Table(
+        f"{prefix}bridge_events",
+        metadata,
+        id_col(),
+        Column("connection", String(64), nullable=False),
+        Column("event_id", String(255), nullable=False),
+        Column("type", String(120), nullable=False),
+        Column("payload", JSONB, nullable=False),  # the whole body as sent
+        Column("sent_at", DateTime(timezone=True), nullable=False),  # its signed timestamp
+        now_col("received_at"),
+        Column("status", String(16), nullable=False, server_default="pending"),
+        Column("attempts", Integer, nullable=False, server_default="0"),
+        now_col("next_at"),
+        Column("handled_at", DateTime(timezone=True)),
+        Column("last_error", Text),
+        UniqueConstraint("connection", "event_id"),
+        CheckConstraint(_in("status", BRIDGE_EVENT_STATUSES), name="status"),
+    )
+    Index(
+        f"ix_{prefix}bridge_events_due",
+        bridge_events.c.next_at,
+        postgresql_where=bridge_events.c.status == "pending",
+    )
+
     return RuntimeTables(
         actors=actors,
         identities=identities,
@@ -640,4 +671,5 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         media=media,
         media_blobs=media_blobs,
         media_uploads=media_uploads,
+        bridge_events=bridge_events,
     )

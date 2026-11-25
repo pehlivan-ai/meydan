@@ -6,6 +6,26 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.40.0] - 2026-11-25
+### Added
+- `meydan.bridge`: events from outside systems (a partner's app, a payment provider, a booking
+  tool). A connection is a name and a shared secret; requests are signed with
+  [Standard Webhooks](https://www.standardwebhooks.com/) (`webhook-id`, `webhook-timestamp`,
+  `webhook-signature`, `v1` HMAC-SHA256; several secrets while one is rotated; ±5 minutes).
+  `Bridge.receive` verifies and stores an event once per (connection, event id), before the
+  answer; `Bridge.run`/`drain` hand it to the app's handler for (connection, type) in its own
+  transaction (a savepoint: a failing handler writes nothing), retry with backoff, then `dead`
+  with the reason; `PermanentError` from a handler: dead at once; no handler: `ignored`;
+  `Bridge.retry` puts one back. `meydan.bridge.web.routes`: `POST /{connection}/webhooks`.
+  Helpers for senders and tests: `new_secret`, `sign`, `headers`, `verify`. docs/bridges.md.
+- `expect.complete(...)`: an expectation completed by an outside event that carries its token
+  (a reference in a link), once, with the button answer's checks; `NotCompletedError(reason)`.
+### Upgrading
+- New table `meydan_bridge_events`: generate a migration (`alembic revision --autogenerate`).
+- From before 0.37: `meydan.operator.WINDOWS` is gone (0.37 did not say so). A channel's reply
+  window is `runtime.rules.of(channel).reply_window` (`meydan.rules.DEFAULT` unless you set
+  rules).
+
 ## [0.39.0] - 2026-11-22
 ### Added
 - `Outbound.recall`: what the model reads of one of our messages in later turns, instead of its

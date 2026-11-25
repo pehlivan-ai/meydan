@@ -180,6 +180,59 @@ def _close(
     return Expectation.of(row) if row else None
 
 
+class NotCompletedError(Exception):
+    """Why `complete` could not: unknown (no such token, or another kind), answered, cancelled,
+    expired (or closed otherwise), option (not one of its options)."""
+
+    def __init__(self, reason: str, expectation: "Expectation | None" = None):
+        super().__init__(reason)
+        self.reason, self.expectation = reason, expectation
+
+
+def complete(
+    conn: Connection,
+    t: RuntimeTables,
+    token: str,
+    *,
+    kind: str,
+    answer: str,
+    by: uuid.UUID | None = None,
+    evidence: dict[str, Any] | None = None,
+) -> Expectation:
+    """Complete a pending expectation from outside a conversation: an event from an outside
+    system that carries the token it was given (a reference in a payment link, say;
+    docs/bridges.md). Once, like a button answer: a second call raises `NotCompletedError`.
+
+    `kind` must match (a token of another kind is unknown here). `answer` must be one of its
+    options when it has any. `by` is the actor it counts as answered by, if known. `evidence`
+    (the event's id, say) is kept in its data under "evidence". A late one is not closed here:
+    the sweep closes it and runs the kind's `on_close`."""
+    e = t.expectations
+    row = conn.execute(
+        select(e, (e.c.expires_at > _now()).label("live"))
+        .where(e.c.token_hash == _hash(token))
+        .with_for_update()
+    ).first()
+    if row is None or row.kind != kind:
+        raise NotCompletedError("unknown")
+    exp = Expectation.of(row)
+    if exp.state == "answered":
+        raise NotCompletedError("answered", exp)
+    if exp.state == "cancelled":
+        raise NotCompletedError("cancelled", exp)
+    if exp.state != "pending" or not row.live:
+        raise NotCompletedError("expired", exp)
+    if exp.options and answer not in exp.options:
+        raise NotCompletedError("option", exp)
+    data = {**exp.data, "evidence": evidence} if evidence is not None else exp.data
+    done = _close(
+        conn, t, exp.id, "answered", answer=answer[:80], answered_by=by, answered_at=_now(),
+        data=data,
+    )  # fmt: skip
+    assert done is not None  # locked above and pending
+    return done
+
+
 def ask(
     conn: Connection,
     runtime: "Runtime",
