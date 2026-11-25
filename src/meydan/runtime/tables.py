@@ -97,6 +97,7 @@ class RuntimeTables:
     bridge_events: Table
     connections: Table
     connection_credentials: Table
+    bridge_rejections: Table
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -688,6 +689,20 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         CheckConstraint(_in("origin", CREDENTIAL_ORIGINS), name="origin"),
     )
     Index(f"ix_{prefix}connection_credentials_connection", connection_credentials.c.connection)
+    # Requests a known connection sent that were refused (bad signature, old timestamp, no type):
+    # what the other side needs to see while setting up. No body is kept, only why. Kept 30 days.
+    bridge_rejections = Table(
+        f"{prefix}bridge_rejections",
+        metadata,
+        id_col(),
+        Column("connection", String(64), nullable=False),
+        Column("status", Integer, nullable=False),
+        Column("reason", String(200), nullable=False),
+        Column("webhook_id", String(255)),
+        now_col("at"),
+    )
+    Index(f"ix_{prefix}bridge_rejections_connection_at", bridge_rejections.c.connection,
+          bridge_rejections.c.at)  # fmt: skip
 
     return RuntimeTables(
         actors=actors,
@@ -719,4 +734,5 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         bridge_events=bridge_events,
         connections=connections,
         connection_credentials=connection_credentials,
+        bridge_rejections=bridge_rejections,
     )

@@ -6,6 +6,21 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.42.0] - 2026-11-25
+### Added
+- `meydan.bridge.manage.routes(bridge, auth, may=, audit=, names=, reveal=False)`: managing
+  connections over HTTP for a connection's own page or the team's. The app's `may(principal,
+  connection, "read" | "manage")` decides everything (nothing by default, admins included);
+  `audit` records each change in its transaction. List, get, events, refused requests, retry, a
+  secret of ours (returned once) or theirs, public key, rotate, retire, on/off. Showing a stored
+  secret again is off unless `reveal=True` (audited), so an app can keep secrets from its own
+  admins.
+- Refused requests of a known connection are kept (`meydan_bridge_rejections`: status, reason,
+  webhook id; no bodies; pruned after 30 days by `Bridge.run`), so the other side can see why
+  while setting up. `Bridge.note_rejection`, `Bridge.prune`.
+### Upgrading
+- New table `meydan_bridge_rejections`: generate a migration.
+
 ## [0.41.0] - 2026-11-25
 ### Added
 - `meydan.bridge.connections` (extra `bridge`): connections and their credentials in the

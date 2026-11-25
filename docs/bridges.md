@@ -180,6 +180,33 @@ Tables: `meydan_connections` (name, status, endpoint_id, note) and
 `meydan_connection_credentials` (connection, kind `whsec`/`whpk`, origin `ours`/`theirs`, sealed,
 fingerprint, valid_from, valid_until, created_by).
 
+### Managing them over HTTP (available since 0.42, extras `api`, `bridge`)
+
+`meydan.bridge.manage.routes(bridge, auth, may=, audit=, names=, reveal=False)`: what a
+connection's own page, or the team's, needs. The app decides everything:
+
+- `may(principal, connection, action)`: `read` (see it, its credentials without values, its
+  events and refused requests) or `manage` (create, accept, rotate, retire credentials; add a
+  public key; retry an event; switch it on/off). Nothing is allowed by default, admins included;
+  reading does not imply managing. May be async (an OpenFGA check). Unknown or not allowed: 404,
+  so names stay private.
+- `audit(conn, principal, action, connection)`: called in the change's own transaction.
+- `reveal`: showing a stored secret again is **off** by default. A secret is shown once, when it
+  is made; with `reveal=False` nobody can read it back, so an app can keep secrets away from its
+  own admins. `reveal=True` adds an audited "show again".
+
+| Route | Does |
+|---|---|
+| `GET ""`, `GET /{name}` | the connections this person may read; one |
+| `GET /{name}/events`, `GET /{name}/rejections` | its latest events (with payload and outcome); its latest **refused** requests and why (bad signature, old timestamp, no type; no bodies kept, 30 days) |
+| `POST /{name}/secrets` | `{}`: a secret of ours, returned once; `{"secret": "whsec_..."}`: theirs |
+| `POST /{name}/public-keys`, `POST /{name}/rotate` | their `whpk_` key (+ endpoint id); a new secret of ours, old ones end after `overlap_days` |
+| `POST /{name}/credentials/{id}/retire`, `.../reveal` | end one (now or later); show one again (only with `reveal=True`) |
+| `POST /{name}/events/{id}/retry`, `POST /{name}/status` | put a dead/ignored event back; on/off |
+
+Refused requests of a known connection are kept in `meydan_bridge_rejections` (connection,
+status, reason, webhook id, time): what the other side most needs while setting up.
+
 **Who creates the secret?** Either side; the code is the same. If their system already makes
 webhook secrets, take theirs (`add_secret`). If not, make one (`generate_secret`) and hand it over
 on a safe channel, never in a chat. Safest: they keep a key pair and give us only the public key
@@ -201,7 +228,6 @@ the old one. Keep it with the app's other secrets, not in the database it protec
 
 - Outgoing events and calls to outside systems (an outbox for them): with the second bridge
   that needs them (a booking tool, through `meydan.booking`'s adapter).
-- A principal for a connection's people (their own page: their events, their secret).
 - Typed events: a model per event type, checked on arrival, its schema published as docs.
 - Self-service connecting across apps: the hosting platform's work.
 - A protocol for agents of other instances: later, and not necessarily an existing one.
