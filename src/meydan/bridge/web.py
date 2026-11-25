@@ -1,6 +1,6 @@
 """A bridge's HTTP door (extra `api`): one route per connection, `POST /{connection}/webhooks`.
 
-    app.include_router(bridge_routes(bridge), prefix="/partners")
+    app.include_router(bridge_routes(bridge), prefix="/connections")
 
 The request is verified and stored in one short transaction, then answered (any 2xx tells a
 Standard Webhooks sender it arrived; a repeat gets 200 as well). Handling happens in the worker

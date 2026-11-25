@@ -6,9 +6,34 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.41.0] - 2026-11-25
+### Added
+- `meydan.bridge.connections` (extra `bridge`): connections and their credentials in the
+  database instead of config. A credential is a shared secret (`whsec`, `v1`) or their public key
+  (`whpk`, `v2a`), **ours** (we generated it) or **theirs** (they gave it to us), valid from/until
+  so old and new work together while rotating. `ensure`, `set_status`, `generate_secret`,
+  `add_secret`, `add_public_key`, `rotate`, `retire`, `credentials`, `listing` (fingerprints, no
+  values), `reveal`, `reseal`. `Bridge(..., keyring=)` reads them; `secrets=` (config) still
+  works and wins for a name it has.
+- Standard Webhooks `v2a` (ed25519, the spec's asymmetric scheme): `verify` accepts it with a
+  connection's public keys and endpoint id; `new_keypair`, `sign_v2a`, `public_key`;
+  `headers(..., signing_key=, endpoint_id=)`. Checked against the spec's own example.
+- `meydan.vault.Keyring`: secrets sealed at rest with AES-256-GCM, bound to their row, keys by id
+  from `MEYDAN_KEYRING` (`k2:<base64>,k1:<base64>`, first is current) so the key can rotate.
+- `python -m meydan.bridge secret | keypair | send URL --type --data`: make credentials, or be the
+  other side and send a signed event (secrets from the environment).
+### Changed
+- `Bridge(...)`: `secrets` is optional (keyword); `verify` takes `Credentials` (or, as before, a
+  list of secrets). docs/bridges.md: a "Words" section; meydan names only the technical link.
+### Upgrading
+- New tables `meydan_connections`, `meydan_connection_credentials`: generate a migration.
+- To keep credentials in the database: add the `bridge` extra, set `MEYDAN_KEYRING`, pass
+  `keyring=` to `Bridge`, and move secrets from config with `add_secret` (origin theirs) or
+  `generate_secret`.
+
 ## [0.40.0] - 2026-11-25
 ### Added
-- `meydan.bridge`: events from outside systems (a partner's app, a payment provider, a booking
+- `meydan.bridge`: events from outside systems (a stakeholder's software, a payment provider, a booking
   tool). A connection is a name and a shared secret; requests are signed with
   [Standard Webhooks](https://www.standardwebhooks.com/) (`webhook-id`, `webhook-timestamp`,
   `webhook-signature`, `v1` HMAC-SHA256; several secrets while one is rotated; ±5 minutes).

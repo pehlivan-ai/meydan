@@ -923,7 +923,7 @@ wheels = [
 
 [[package]]
 name = "meydan"
-version = "0.40.0"
+version = "0.41.0"
 source = { editable = "." }
 dependencies = [
     { name = "pydantic" },
@@ -940,6 +940,9 @@ api = [
 booking = [
     { name = "psycopg", extra = ["binary"] },
     { name = "sqlalchemy" },
+]
+bridge = [
+    { name = "cryptography" },
 ]
 email = [
     { name = "dnspython" },
@@ -972,6 +975,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cryptography", marker = "extra == 'bridge'", specifier = ">=43" },
     { name = "dnspython", marker = "extra == 'email'", specifier = ">=2.6" },
     { name = "fastapi", marker = "extra == 'api'", specifier = ">=0.115" },
     { name = "httpx", marker = "extra == 'llm'", specifier = ">=0.28" },
@@ -989,7 +993,7 @@ requires-dist = [
     { name = "sqlalchemy", marker = "extra == 'runtime'", specifier = ">=2.1" },
     { name = "tenacity", marker = "extra == 'llm'", specifier = ">=9" },
 ]
-provides-extras = ["booking", "runtime", "api", "llm", "access", "email", "eval", "notify"]
+provides-extras = ["booking", "runtime", "bridge", "api", "llm", "access", "email", "eval", "notify"]
 
 [package.metadata.requires-dev]
 dev = [
