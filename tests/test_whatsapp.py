@@ -389,6 +389,73 @@ async def test_send_a_contact_card_people_can_message_or_save():
         Outbound.contact_message(" ", "+905550000002")
 
 
+async def test_send_a_link_as_one_button_that_opens_the_page():
+    from meydan.channels.base import link_text
+    from meydan.channels.whatsapp import check_link
+
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"messages": [{"id": "wamid.U"}]})
+
+    link = Outbound.link_message("Spring Cup: ₺500", "Pay now", "https://pay.example/o/tok")
+    assert await cloud(handler).send("222", "905550000001", link) == "wamid.U"
+    assert seen[0]["type"] == "interactive"
+    assert seen[0]["interactive"] == {
+        "type": "cta_url",
+        "body": {"text": "Spring Cup: ₺500"},
+        "action": {
+            "name": "cta_url",
+            "parameters": {"display_text": "Pay now", "url": "https://pay.example/o/tok"},
+        },
+    }
+    # Transcripts read the text and the label, never the address (it may be a bearer link).
+    assert link.text == "Spring Cup: ₺500\n[link: Pay now]" and "tok" not in link.text
+    assert link_text(link) == "Spring Cup: ₺500\n\nPay now: https://pay.example/o/tok"
+    assert Outbound.from_payload(link.to_payload()) == link
+    long = Outbound.link_message(
+        "Spring Cup", "A label that is far too long", "https://pay.example/o/t"
+    )
+    with pytest.raises(ValueError, match="label over 20"):
+        check_link(long)
+    with pytest.raises(SendError) as e:
+        await cloud(handler).send("222", "905550000001", long)
+    assert not e.value.retryable and len(seen) == 1
+    for url in ("http://pay.example/o/t", "/o/t", "https://", "https://pay.example/o t", ""):
+        with pytest.raises(ValueError, match="https"):
+            Outbound.link_message("Spring Cup", "Pay", url)
+    with pytest.raises(ValueError):
+        Outbound.link_message(" ", "Pay", "https://pay.example/o/t")
+    with pytest.raises(ValueError):
+        Outbound.link_message("Spring Cup", "", "https://pay.example/o/t")
+
+
+async def test_a_template_url_button_gets_its_suffix_after_the_quick_replies():
+    seen = []
+
+    def handler(request):
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, json={"messages": [{"id": "wamid.T"}]})
+
+    only = Outbound.template_message("payment_link", "tr", url_suffix="tok123", name="Spring Cup")
+    both = Outbound.template_message("offer", "tr", buttons=("no:1",), url_suffix="tok", n="A")
+    await cloud(handler).send("222", "905550000001", only)
+    await cloud(handler).send("222", "905550000001", both)
+    assert seen[0]["template"]["components"][-1] == {
+        "type": "button", "sub_type": "url", "index": "0",
+        "parameters": [{"type": "text", "text": "tok123"}],
+    }  # fmt: skip
+    assert [(c.get("sub_type"), c.get("index")) for c in seen[1]["template"]["components"]] == [
+        (None, None), ("quick_reply", "0"), ("url", "1")
+    ]  # fmt: skip
+    assert Outbound.from_payload(only.to_payload()) == only
+    # A row without the URL fields (and one with keys from a newer release) still reads.
+    plain = Outbound.text_message("hi").to_payload()
+    assert "url" not in plain and "url_suffix" not in plain
+    assert Outbound.from_payload(plain | {"added_later": 1}) == Outbound.text_message("hi")
+
+
 async def test_upload_a_file_then_send_the_image_by_id():
     seen = []
 

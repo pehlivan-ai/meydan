@@ -6,6 +6,29 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.49.0] - 2026-11-26
+### Added
+- Links: `Outbound.link_message(body, label, url)` (kind `link`): a text with one button that
+  opens an https page. WhatsApp sends it as an interactive call-to-action URL button (`cta_url`;
+  `whatsapp.check_link`: text up to 1024 characters, label up to 20), Telegram as an inline URL
+  button, Instagram as text (`link_text`: the body, then `label: url`). Its `text` (what
+  transcripts read) is the body and `[link: label]`, never the address.
+- `meydan.reply.Link` attachment (`resolve` -> `LinkRef(url, label, text, recall, ref)`, or
+  `Link.of(...)` from a row): the model names the thing, the app's code builds the address; its
+  text form goes as the `fallback`.
+- `Outbound.template_message(..., url_suffix=)`: a template's URL button variable (WhatsApp:
+  button `sub_type` url, after the quick replies).
+- `meydan.observe`: a link we sent shows as `Line.link` (`LinkPart`: label, url).
+- `meydan.channels.base.is_https`.
+
+### Changed
+- `Outbound.from_payload` ignores keys it doesn't know (a row written by a newer release), and
+  `to_payload` writes the new `url`, `url_label`, `url_suffix` only when set, so a rollback still
+  sends what was queued.
+
+### Upgrading
+- No table changes. An app that renders observe lines by kind may show `link` (`line.link`).
+
 ## [0.48.0] - 2026-11-26
 ### Added
 - Fact `conversation.read` (`meydan.operator.STAFF_READ`): `operator.mark_read` emits it, with the

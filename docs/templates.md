@@ -28,6 +28,8 @@ Outbound.template_message("daily_plan", "tr", **{"1": "Ada"})
 # an image header: a file kept in meydan.media (since v0.38.0)
 key = media.put(conn, tables, png, "image/png")
 Outbound.template_message("daily_plan", "tr", media=key, **{"1": "Ada"})
+# a URL button whose address ends in a variable (https://example.com/o/{{1}}), since v0.49.0:
+Outbound.template_message("payment_link", "tr", url_suffix=token, event="Spring Cup")
 ```
 
 A template is approved with one parameter format, named or numbered, and the message must use the
@@ -35,6 +37,11 @@ same: WhatsApp refuses names for a numbered template. The image header is upload
 like an image message (once per sending number, reused while Meta keeps it) and goes as the
 header's `id`. On Telegram, which has no templates, it goes as a photo with the template's text as
 its caption.
+
+`url_suffix` fills a URL button's variable: WhatsApp appends it to the base address approved with
+the template, so the approved part (scheme, host, path) can't change. The button goes after the
+template's quick replies (`buttons`), so give it that place when you design the template. Telegram's
+`render` decides how (or whether) it shows there.
 
 ## Where the state comes from
 

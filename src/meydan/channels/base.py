@@ -1,8 +1,9 @@
 """Channel-neutral message types shared by adapters and the runtime."""
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime
 from typing import Any, Literal
+from urllib.parse import urlsplit
 
 
 @dataclass(frozen=True)
@@ -164,9 +165,10 @@ class EndpointUpdate:
 @dataclass(frozen=True)
 class Outbound:
     """Something to send in a conversation: free-form text, an approved template, a location
-    (a map pin), choices (a question with options to tap), a contact card or an image."""
+    (a map pin), choices (a question with options to tap), a contact card, an image or a link (a
+    text with one button that opens a web page)."""
 
-    kind: Literal["text", "template", "location", "choices", "contact", "image"]
+    kind: Literal["text", "template", "location", "choices", "contact", "image", "link"]
     text: str = ""
     template: str | None = None
     language: str | None = None
@@ -199,6 +201,13 @@ class Outbound:
     # An image: the file's key in meydan.media and an optional caption under it.
     media: str | None = None
     caption: str | None = None
+    # A link: the text (`body`), the button's label and the page it opens (https). The app's code
+    # builds the address, never a model (docs/reply.md, "A link").
+    url: str | None = None
+    url_label: str | None = None
+    # A template's URL button: the part its address ends with (WhatsApp appends it to the base
+    # URL approved with the template). The button comes after the template's quick replies.
+    url_suffix: str | None = None
     # What an agent reads of this message later, in its history, instead of `text`: the person
     # and anyone allowed to see the conversation get the real message (meydan.observe), the model
     # a line like "[timetable: 23 Nov, 4 lessons]" (docs/privacy.md). Left out: `text`.
@@ -237,11 +246,14 @@ class Outbound:
         media: str | None = None,
         recall: str | None = None,
         fallback: "Outbound | None" = None,
+        url_suffix: str | None = None,
         **params: str,
     ) -> "Outbound":
         """An approved template. `params` fill its body: by name (`name="Ada"`) for a template
         with named parameters, or `**{"1": "Ada"}` for one with numbered ones ({{1}}, {{2}}…).
-        `media`, a key in meydan.media, is its image header: uploaded like an image message."""
+        `media`, a key in meydan.media, is its image header: uploaded like an image message.
+        `url_suffix`: the end of its URL button's address (a template whose button URL ends in
+        a variable, e.g. `https://example.com/o/{{1}}`), after its quick replies."""
         # Positional-only, so a template parameter may be called `name` or `template` too.
         return cls(
             kind="template",
@@ -253,6 +265,7 @@ class Outbound:
             media=media,
             recall=recall,
             fallback=fallback,
+            url_suffix=url_suffix,
         )
 
     @classmethod
@@ -350,6 +363,34 @@ class Outbound:
             kind="image", text=text, media=media, caption=caption, ref=ref, fallback=fallback
         )
 
+    @classmethod
+    def link_message(
+        cls,
+        body: str,
+        label: str,
+        url: str,
+        *,
+        ref: str | None = None,
+        recall: str | None = None,
+        fallback: "Outbound | None" = None,
+    ) -> "Outbound":
+        """A text with one button that opens `url` (https) in the person's browser; `label` is
+        the button (WhatsApp: 20 characters at most, `whatsapp.check_link`). `text` keeps the
+        body and the label but not the address (`[link: label]`), so an agent reading the
+        conversation knows the button went out without ever reading the address (which may be a
+        bearer link). `fallback`: sent instead if it cannot be delivered (`link_text` is the
+        same as plain text)."""
+        if not body.strip():
+            raise ValueError("a link needs a text to go with it")
+        if not label.strip():
+            raise ValueError("a link needs a label for its button")
+        if not is_https(url):
+            raise ValueError("a link's address is an absolute https URL")
+        return cls(
+            kind="link", text=f"{body}\n[link: {label}]", body=body, url=url, url_label=label,
+            ref=ref, recall=recall, fallback=fallback,
+        )  # fmt: skip
+
     def to_payload(self) -> dict[str, Any]:
         return {
             "kind": self.kind,
@@ -377,10 +418,19 @@ class Outbound:
             "caption": self.caption,
             "recall": self.recall,
             "fallback": self.fallback.to_payload() if self.fallback else None,
-        }
+        } | {  # only when set: a row without them still reads in a release from before them
+            k: v
+            for k, v in (
+                ("url", self.url), ("url_label", self.url_label), ("url_suffix", self.url_suffix)
+            )
+            if v is not None
+        }  # fmt: skip
 
     @classmethod
     def from_payload(cls, data: dict[str, Any]) -> "Outbound":
+        """A message as `to_payload` stored it. Keys this release doesn't know (written by a
+        newer one) are left out, so a rollback still sends what was queued."""
+        data = {k: v for k, v in data.items() if k in _FIELDS}
         return cls(
             **{
                 **data,
@@ -389,6 +439,23 @@ class Outbound:
                 "fallback": cls.from_payload(data["fallback"]) if data.get("fallback") else None,
             }
         )
+
+
+_FIELDS = frozenset(f.name for f in fields(Outbound))
+
+
+def is_https(url: str | None) -> bool:
+    """An absolute https URL with a host, without spaces: what a link button may open."""
+    if not url or any(c.isspace() for c in url):
+        return False
+    parts = urlsplit(url)
+    return parts.scheme == "https" and bool(parts.hostname)
+
+
+def link_text(message: Outbound) -> str:
+    """A link as plain text, for a channel without link buttons (or as its fallback): the body,
+    then the label and the address."""
+    return f"{message.body or ''}\n\n{message.url_label}: {message.url}".strip()
 
 
 class SendError(Exception):

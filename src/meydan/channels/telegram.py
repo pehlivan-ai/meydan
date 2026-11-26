@@ -214,6 +214,13 @@ class Telegram:
                 from_number, "sendMessage", chat_id=chat, **self._text(message.body or ""),
                 reply_markup={"inline_keyboard": rows},
             )  # fmt: skip
+        elif message.kind == "link":
+            # An inline button that opens the page (Bot API InlineKeyboardButton `url`).
+            sent = await self.call(
+                from_number, "sendMessage", chat_id=chat, **self._text(message.body or ""),
+                reply_markup={"inline_keyboard": [[{"text": message.url_label,
+                                                    "url": message.url}]]},
+            )  # fmt: skip
         elif message.kind == "template":
             text, labels = self._render(message)
             if len(labels) != len(message.buttons):

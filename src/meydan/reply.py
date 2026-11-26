@@ -27,13 +27,13 @@ Needs only Pydantic: no agent framework, no runtime.
 import logging
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Annotated, Any, ClassVar, Literal, Union, get_args, get_origin
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from pydantic.json_schema import SkipJsonSchema
 
-from meydan.channels.base import Choice, Outbound
+from meydan.channels.base import Choice, Outbound, link_text
 
 log = logging.getLogger("meydan.reply")
 
@@ -121,8 +121,9 @@ class ReplyStyle:
 
 
 # --- Attachments ------------------------------------------------------------------------------
-# What a reply sends after its bubbles: a map pin, a photo, a contact card, choices to tap. The
-# model names a thing (a venue's slug, a tournament's id, a purpose); code finds the real value
+# What a reply sends after its bubbles: a map pin, a photo, a contact card, a link button, choices
+# to tap. The model names a thing (a venue's slug, a tournament's id, a purpose); code finds the
+# real value
 # (`resolve`), so a made-up name sends nothing instead of a made-up address or number. meydan
 # turns what `resolve` returns into the channel's message and keeps the channel's limits.
 #
@@ -134,8 +135,8 @@ class ReplyStyle:
 
 class Attachment(BaseModel):
     """Something sent after the bubbles. Subclass a primitive below (Location, Image, Contact,
-    Choices) and give it `type: Literal["..."]`, `when` and described fields; or subclass this
-    directly and write `to_outbound`."""
+    Link, Choices) and give it `type: Literal["..."]`, `when` and described fields; or subclass
+    this directly and write `to_outbound`."""
 
     model_config = ConfigDict(extra="forbid", json_schema_extra=lambda s, m: _described(s, m))
 
@@ -192,6 +193,20 @@ class Person:
     phone: str
     title: str | None = None
     org: str | None = None
+
+
+@dataclass(frozen=True)
+class LinkRef:
+    """Where a Link's button goes: an https address the app's code built (never a model), the
+    button's label, and the text it goes with. `recall`: what an agent reads of it later
+    (default: the text and "[link: <label>]", never the address). `ref`: the app's key for the
+    message (`Outbound.ref`), to find its delivery later."""
+
+    url: str
+    label: str
+    text: str
+    recall: str | None = None
+    ref: str | None = None
 
 
 class Location(Attachment):
@@ -297,6 +312,49 @@ class Contact(Attachment):
         if p is None:
             return []
         return [Outbound.contact_message(p.name, p.phone, org=p.org, title=p.title)]
+
+
+class Link(Attachment):
+    """A text with one button that opens a web page (WhatsApp: a call-to-action URL button;
+    Telegram: an inline URL button; elsewhere the label and the address as text). The model names
+    the thing; the address comes from code, so a model can't send a made-up or altered one, and
+    never reads it back (`Outbound.link_message`). Implement `resolve`, or declare it from a
+    table with `Link.of(...)`."""
+
+    @classmethod
+    def of(
+        cls, table: Any, *, by: Any, type: str, url: Any, label: Any, text: Any,
+        field: str | None = None, when: str = "", describe: str = "",
+        where: dict[Any, Any] | None = None, visible: Any = None,
+    ) -> type["Link"]:  # fmt: skip
+        """A Link found by `by` in `table`: columns, templates ("{name}") or callables for its
+        address, label and text (a row without an address resolves to nothing)."""
+
+        def build(row: Any) -> LinkRef | None:
+            address, lbl, words = _value(row, url), _value(row, label), _value(row, text)
+            if not address or not lbl or not words:
+                return None
+            return LinkRef(address, lbl, words)
+
+        cols = {"url": url, "label": label, "text": text}
+        return _declared(cls, table, by=by, type=type, field=field, when=when,
+                         describe=describe, columns=cols, where=where, visible=visible,
+                         build=build)  # type: ignore[return-value]  # fmt: skip
+
+    def resolve(self, ctx: Any) -> LinkRef | None:
+        raise NotImplementedError(f"{type(self).__name__} must implement resolve")
+
+    def to_outbound(self, ctx: Any) -> list[Outbound]:
+        """The link message, with its text form as the fallback: should the channel refuse the
+        button for good, the label and the address still arrive."""
+        ref = self.resolve(ctx)
+        if ref is None:
+            return []
+        link = Outbound.link_message(ref.text, ref.label, ref.url, ref=ref.ref, recall=ref.recall)
+        fallback = Outbound.text_message(
+            link_text(link), ref=ref.ref, recall=link.recall or link.text
+        )
+        return [replace(link, fallback=fallback)]
 
 
 # --- Declared from a table --------------------------------------------------------------------

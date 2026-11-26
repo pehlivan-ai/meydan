@@ -240,6 +240,17 @@ async def test_a_contact_card_goes_as_a_telegram_contact():
     assert (body["first_name"], body["last_name"]) == ("Ada", "Kaya")
 
 
+async def test_a_link_goes_as_a_text_with_a_url_button():
+    client, calls = api()
+    link = Outbound.link_message("Spring Cup", "Pay", "https://pay.example/o/tok")
+    await Telegram([TOKEN], client=client).send("111", "900", link)
+    [(path, body)] = calls
+    assert path.endswith("/sendMessage") and body["text"] == "Spring Cup"
+    assert body["reply_markup"] == {
+        "inline_keyboard": [[{"text": "Pay", "url": "https://pay.example/o/tok"}]]
+    }
+
+
 async def test_an_image_goes_as_a_photo_with_the_file():
     from dataclasses import replace
 

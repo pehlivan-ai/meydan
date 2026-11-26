@@ -127,7 +127,7 @@ are in Postgres, so the app needs no message broker and no cache.
 | Module | What it does | Docs | Status |
 |---|---|---|---|
 | `meydan.runtime` | Stores each message once (idempotent on its id) and finds who wrote it. Runs one turn per conversation at a time. Paces and delivers replies, retries with backoff, and stops with the reason. | [identity](docs/identity.md), [routing](docs/routing.md), [presence](docs/presence.md), [failures](docs/failures.md) | available |
-| `meydan.channels.whatsapp` | WhatsApp Cloud API. Checks the signature, reads webhooks, sends text, templates, map pins, choices, contact cards and images from the number that the person wrote to. | [bring-up](docs/bring-up.md) | available |
+| `meydan.channels.whatsapp` | WhatsApp Cloud API. Checks the signature, reads webhooks, sends text, templates, map pins, choices, contact cards, images and link buttons from the number that the person wrote to. | [bring-up](docs/bring-up.md) | available |
 | `meydan.channels.telegram` | Telegram Bot API. Bots as endpoints, long polling, text and inline buttons. | [telegram](docs/telegram.md) | available |
 | `meydan.channels.instagram` | Instagram direct messages to a professional account: text, quick replies, reads. The person writes first, and there are no templates. | [instagram](docs/instagram.md) | available |
 | `meydan.channels.email` | DNS checks for your own mail addresses (MX, SPF, DKIM, DMARC). | [endpoints](docs/endpoints.md) | available |
@@ -135,7 +135,7 @@ are in Postgres, so the app needs no message broker and no cache.
 | `meydan.runtime.expect` | Asks with buttons and waits for the answer (invites, confirmations). Checks who pressed, and when. | [expect](docs/expect.md) | available |
 | `meydan.runtime.endpoints` | Your own numbers and mail addresses, and their health. | [endpoints](docs/endpoints.md) | available |
 | `meydan.agent` | Pydantic AI adapter: tools, history from the transcript, a time limit, usage records. Tool results that say what their fields mean, and a test that nothing the model reads is undescribed. | [tools](docs/tools.md) | available |
-| `meydan.reply` | A reply as bubbles, then attachments (a map pin, a photo, a contact card, choices). The model names a thing, and your code finds it. The shape is checked where the model makes it. | [reply](docs/reply.md) | available |
+| `meydan.reply` | A reply as bubbles, then attachments (a map pin, a photo, a contact card, a link button, choices). The model names a thing, and your code finds it. The shape is checked where the model makes it. | [reply](docs/reply.md) | available |
 | `meydan.media` | Files that you send, kept once by their SHA-256, in a store that you choose (Postgres by default). | [media](docs/media.md) | available |
 | `meydan.tools` | The tool contract: the person comes from the channel, never from the model. | `meydan.tools` docstring | available |
 | `meydan.llm` | Models from spec strings (`openrouter:…`, `vertex:…`, `vertex-openai:…`), a fallback chain, a concurrency limit per provider, one retry layer. | `meydan.llm` docstring | available |
@@ -270,7 +270,7 @@ Each recipe is a few lines in your app. The docs have the code.
 | take events from an outside system (a payment made) and tie them to what you asked for | `meydan.bridge`, `expect.complete` | [bridges](docs/bridges.md) |
 | see how far each message got: delivered, seen, answered | `meydan.observe` | [observe](docs/observe.md#engagement-one-ordinal-scale-since-v012) |
 | bring in a second WhatsApp number and watch its health | `python -m meydan.cli numbers` | [endpoints](docs/endpoints.md) |
-| send a map pin, a photo, a contact card or choices after the bubbles | `meydan.reply` attachments | [reply](docs/reply.md#attachments-what-goes-after-the-bubbles) |
+| send a map pin, a photo, a contact card, a link button or choices after the bubbles | `meydan.reply` attachments | [reply](docs/reply.md#attachments-what-goes-after-the-bubbles) |
 | send a file that you keep in your own storage | `meydan.media` | [media](docs/media.md) |
 | let a person on the team take over a conversation | `meydan.operator` | [operator](docs/operator.md) |
 | notify the team's phones | `meydan.notify` | [notify](docs/notify.md) |
@@ -337,7 +337,7 @@ and ran in a three-day simulation.
 |---|---|
 | People write over WhatsApp or Telegram and get an answer. No message is lost or answered twice. | `meydan.runtime`, `meydan.channels` |
 | An agent acts through tools. The channel, not the model, says who asks. | `meydan.tools`, `meydan.agent`, `meydan.llm` |
-| A reply carries a map pin, a photo, a contact card or choices to tap. | `meydan.reply`, `meydan.media` |
+| A reply carries a map pin, a photo, a contact card, a link button or choices to tap. | `meydan.reply`, `meydan.media` |
 | If the app books time, a time is held and the owner confirms it with a button. Nobody is booked twice. A cancelled time goes to the next person who waits. | `meydan.booking`, `meydan.runtime.expect` |
 | Messages outside the 24-hour window use a template, and wait while it is not approved. | `meydan.runtime.templates` |
 | The owner and the team sign in with a code and see only what they may see. A person on the team can take over a conversation. | `meydan.auth`, `meydan.access`, `meydan.visibility`, `meydan.operator` |

@@ -21,6 +21,7 @@ from meydan.channels.base import (
     SendError,
     StatusUpdate,
     TemplateUpdate,
+    is_https,
 )
 
 # Re-exported: they lived here first and apps import them from here. Both are channel-neutral
@@ -114,6 +115,24 @@ def shared_contacts(message: Inbound) -> list[SharedContact]:
 BUTTONS_MAX, BUTTON_TITLE_MAX, BUTTONS_BODY_MAX, BUTTON_ID_MAX = 3, 20, 1024, 256
 ROWS_MAX, ROW_TITLE_MAX, ROW_DESCRIPTION_MAX, ROW_ID_MAX = 10, 24, 72, 200
 LIST_BODY_MAX, LIST_LABEL_MAX = 4096, 20
+# A link: Meta, Cloud API "Interactive call-to-action URL button messages" (body text required,
+# up to 1024 characters; the button's display_text up to 20).
+LINK_BODY_MAX, LINK_LABEL_MAX = 1024, 20
+
+
+def check_link(message: Outbound) -> None:
+    """Raises ValueError when a link message doesn't fit WhatsApp's call-to-action button, so an
+    app can check before it queues the message (or send `link_text` instead)."""
+    problems = [
+        "no text" if not (message.body or "").strip() else "",
+        f"text over {LINK_BODY_MAX} characters" if len(message.body or "") > LINK_BODY_MAX else "",
+        "no label" if not (message.url_label or "").strip() else "",
+        f"a label over {LINK_LABEL_MAX} characters"
+        if len(message.url_label or "") > LINK_LABEL_MAX else "",
+        "not an https address" if not is_https(message.url) else "",
+    ]  # fmt: skip
+    if problems := [p for p in problems if p]:
+        raise ValueError("link doesn't fit WhatsApp: " + ", ".join(problems))
 
 
 def choice_style(message: Outbound) -> Literal["buttons", "list"]:
@@ -641,6 +660,20 @@ class WhatsAppCloud:
                 body |= {"type": "interactive", "interactive": _interactive(message)}
             except ValueError as e:  # never fits: no retry helps
                 raise SendError(str(e), retryable=False) from None
+        elif message.kind == "link":
+            try:
+                check_link(message)
+            except ValueError as e:  # never fits: its fallback (if any) goes instead
+                raise SendError(str(e), retryable=False) from None
+            cta = {"display_text": message.url_label, "url": message.url}
+            body |= {
+                "type": "interactive",
+                "interactive": {
+                    "type": "cta_url",
+                    "body": {"text": message.body},
+                    "action": {"name": "cta_url", "parameters": cta},
+                },
+            }
         else:
             numbered = bool(message.params) and all(k.isdigit() for k in message.params)
             if numbered:  # {{1}}, {{2}}…: in order, without names
@@ -676,6 +709,15 @@ class WhatsAppCloud:
                         "sub_type": "quick_reply",
                         "index": str(index),
                         "parameters": [{"type": "payload", "payload": payload}],
+                    }
+                )
+            if message.url_suffix is not None:  # its URL button, after the quick replies
+                components.append(
+                    {
+                        "type": "button",
+                        "sub_type": "url",
+                        "index": str(len(message.buttons)),
+                        "parameters": [{"type": "text", "text": message.url_suffix}],
                     }
                 )
             if components:

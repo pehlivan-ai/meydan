@@ -131,6 +131,8 @@ from meydan.reply import (  # noqa: E402
     Contact,
     Image,
     ImageRef,
+    Link,
+    LinkRef,
     Location,
     Person,
     Place,
@@ -168,6 +170,17 @@ class Desk(Contact):
         return Person("Ada Kaya", "+905550000002", title="Sales") if ctx == "ok" else None
 
 
+class PayLink(Link):
+    type: Literal["pay"] = "pay"
+    when = "When they want to pay for their order."
+    order: str = Field(description="The order's id, from a tool result.")
+
+    def resolve(self, ctx):
+        if self.order != "o1":
+            return None
+        return LinkRef("https://pay.example/o/secret", "Pay", "Order o1: ₺500", ref="order:o1")
+
+
 class Broken(Location):
     type: Literal["broken"] = "broken"
     when = "Never."
@@ -181,7 +194,7 @@ class Turkish(Choices):
 
 
 class Full(Reply):
-    attachments: Attachments[Venue, Poster, Desk, Turkish, Broken] = Field(
+    attachments: Attachments[Venue, Poster, Desk, Turkish, PayLink, Broken] = Field(
         default_factory=list, description="Sent after the bubbles, in this order."
     )
 
@@ -243,6 +256,24 @@ def test_choices_are_buttons_or_a_list_and_text_when_they_cant_be():
     assert m.kind == "text" and m.text == "Hangisi?\n• A\n• a"
     with pytest.raises(ValidationError):  # WhatsApp's own limits are in the schema
         Full(attachments=[{"type": "choices", "question": "Q", "options": [{"title": "x" * 25}]}])
+
+
+def test_a_link_is_built_in_code_and_its_address_never_reaches_a_transcript():
+    [m] = Full(bubbles=["Ödeme sayfanız hazır."], attachments=[{"type": "pay", "order": "o1"}]
+               ).outbound()[1:]  # fmt: skip
+    assert (m.kind, m.url, m.url_label, m.body, m.ref) == (
+        "link", "https://pay.example/o/secret", "Pay", "Order o1: ₺500", "order:o1")  # fmt: skip
+    assert m.text == "Order o1: ₺500\n[link: Pay]"  # what an agent reads of it later
+    # If the channel refuses the button for good, the text with the address goes instead; an
+    # agent still reads it without the address.
+    assert m.fallback.kind == "text" and m.fallback.ref == "order:o1"
+    assert m.fallback.text.endswith("Pay: https://pay.example/o/secret")
+    assert "secret" not in m.fallback.recall
+    assert Full(attachments=[{"type": "pay", "order": "made-up"}]).outbound() == []
+    with pytest.raises(ValidationError):  # the model names the order; it can't give an address
+        Full(attachments=[{"type": "pay", "order": "o1", "url": "https://elsewhere.example"}])
+    schema = Full.model_json_schema()["$defs"]["PayLink"]
+    assert set(schema["properties"]) == {"type", "order"}
 
 
 def test_the_schema_tells_attachments_apart_by_type_and_says_when_to_use_each():
@@ -346,8 +377,15 @@ SalesDesk = Contact.of(
 )  # fmt: skip
 
 
+Tickets = Link.of(
+    Event, by=Event.id, field="event", type="tickets", when="When they want to buy tickets.",
+    describe="The event's id, from a tool result.", label="Buy",
+    url=lambda e: f"https://tickets.example/{e.id}" if e.public else None, text="{name} tickets",
+)  # fmt: skip
+
+
 class Declared(Reply):
-    attachments: Attachments[Place_, EventPoster, SalesDesk] = Field(
+    attachments: Attachments[Place_, EventPoster, SalesDesk, Tickets] = Field(
         default_factory=list, description="Sent after the bubbles, in this order."
     )
 
@@ -392,6 +430,20 @@ def test_declared_attachments_find_their_row_and_send_it(session):
     assert nothing.outbound(session) == []
     garbled = Declared(attachments=[{"type": "poster", "event": "not-a-uuid"}])
     assert garbled.outbound(session) == []  # not a key at all
+
+
+def test_a_declared_link_builds_its_address_from_the_row(session):
+    shown = Event(name="Spring Cup", poster=None)
+    hidden = Event(name="Test Cup", poster=None, public=False)
+    session.add_all([shown, hidden])
+    session.flush()
+    [m] = Declared(attachments=[{"type": "tickets", "event": str(shown.id)}]).outbound(session)
+    assert (m.kind, m.url, m.url_label, m.body) == (
+        "link", f"https://tickets.example/{shown.id}", "Buy", "Spring Cup tickets")  # fmt: skip
+    # no address for this row: nothing is sent
+    assert (
+        Declared(attachments=[{"type": "tickets", "event": str(hidden.id)}]).outbound(session) == []
+    )
 
 
 def test_a_declared_type_reads_like_one_written_by_hand():

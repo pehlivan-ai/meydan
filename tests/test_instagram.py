@@ -94,16 +94,18 @@ async def test_choices_that_instagram_would_cut_are_refused_not_sent():
     assert not e.value.retryable and calls == []
 
 
-async def test_a_location_and_a_contact_card_go_as_text():
+async def test_a_location_a_contact_card_and_a_link_go_as_text():
     client, calls = graph()
     ig = Instagram("tok", client=client)
     pin = Outbound.location_message(36.8, 34.6, place="Salon", address="Cad 1")
     await ig.send(OURS, THEM, pin)
     await ig.send(OURS, THEM, Outbound.contact_message("Ada Yılmaz", "+905550000000"))
+    await ig.send(OURS, THEM, Outbound.link_message("Sipariş", "Öde", "https://pay.example/o/t"))
     texts = [body["message"]["text"] for _, _, body in calls]
     assert texts == [
         "Salon\nCad 1\nhttps://www.google.com/maps/search/?api=1&query=36.8,34.6",
         "Ada Yılmaz\n+905550000000",
+        "Sipariş\n\nÖde: https://pay.example/o/t",  # no link buttons: the label and the address
     ]
 
 

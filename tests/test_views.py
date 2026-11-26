@@ -262,6 +262,7 @@ async def test_each_line_shows_its_parts_as_the_person_saw_them(world):
             Outbound.choices_message("Which one?", [Choice("a", "Spring Cup"),
                                                    Choice("b", "Autumn Cup")], label="Pick"),
             Outbound.contact_message("Ada Kaya", "+15550009999", title="Sales"),
+            Outbound.link_message("Your order", "Pay", "https://pay.example/o/tok"),
         ])  # fmt: skip
         o = rt.t.outbox
         c.execute(update(o).where(o.c.message["kind"].astext == "choices")
@@ -286,13 +287,17 @@ async def test_each_line_shows_its_parts_as_the_person_saw_them(world):
     card = by_kind["contact"]
     assert (card.contact.name, card.contact.phone, card.contact.title) == (
         "Ada Kaya", "+15550009999", "Sales")  # fmt: skip
+    link = by_kind["link"]
+    assert (link.link.label, link.link.url, link.text) == (
+        "Pay", "https://pay.example/o/tok", "Your order")  # fmt: skip
     answer = by_kind["interactive"]
     assert answer.tapped and answer.reply_to == ask.id and answer.text == "Spring Cup"
 
     hidden = read(rt, query.conversation, who(bora, "ops"), conv)  # may not read others' messages
     if hidden is not None:
         assert all(
-            ln.image is ln.location is ln.choices is ln.contact is None for ln in hidden.lines
+            ln.image is ln.location is ln.choices is ln.contact is ln.link is None
+            for ln in hidden.lines
         )
 
 

@@ -300,6 +300,9 @@ def _parts(message: dict, channel: str) -> dict:
             title=message.get("contact_title"), org=message.get("contact_org"),
         )  # fmt: skip
         out["text"] = None
+    elif kind == "link":
+        out["link"] = LinkPart(label=message.get("url_label") or "", url=message.get("url"))
+        out["text"] = message.get("body")
     return out
 
 
@@ -466,6 +469,11 @@ class ContactPart(BaseModel):
     org: str | None = None
 
 
+class LinkPart(BaseModel):
+    label: str  # the button
+    url: str | None = None  # the page it opens
+
+
 class Line(BaseModel):
     id: str  # "in:<id>" | "out:<id>": stable, for an app to point at one message
     at: datetime
@@ -486,13 +494,14 @@ class Line(BaseModel):
     # A one-time code (an authentication template): never shown, only that it was sent.
     code: bool = False
     # What kind of message it was, and its parts as the person saw them (with `text`, hidden
-    # together). Ours: text | template | image | location | choices | contact. Theirs: the
-    # channel's kind (text, interactive, button, image, location, ...).
+    # together). Ours: text | template | image | location | choices | contact | link. Theirs:
+    # the channel's kind (text, interactive, button, image, location, ...).
     kind: str = "text"
     image: ImagePart | None = None
     location: LocationPart | None = None
     choices: ChoicesPart | None = None
     contact: ContactPart | None = None
+    link: LinkPart | None = None
     # Theirs: the message of ours it answers ("out:<id>"), and whether they tapped an option.
     reply_to: str | None = None
     tapped: bool = False
@@ -603,7 +612,8 @@ def conversation(
     ]
     lines.sort(key=lambda line: line.at)
     if not show_text:  # the parts carry what was said, so they go with the text
-        hidden = {"text": None, "image": None, "location": None, "choices": None, "contact": None}
+        hidden = {"text": None, "image": None, "location": None, "choices": None, "contact": None,
+                  "link": None}  # fmt: skip
         lines = [line.model_copy(update=hidden) for line in lines]
 
     # Per turn: the inbound messages it answered (processed when the turn finished) and its sends.

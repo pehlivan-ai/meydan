@@ -38,7 +38,7 @@ from urllib.parse import quote
 
 import httpx
 
-from meydan.channels.base import Address, Inbound, Outbound, SendError, StatusUpdate
+from meydan.channels.base import Address, Inbound, Outbound, SendError, StatusUpdate, link_text
 from meydan.channels.meta import verify_signature
 from meydan.rules import INSTAGRAM
 
@@ -167,6 +167,8 @@ class Instagram:
             body = {"text": _location_text(message)}
         elif message.kind == "contact":
             body = {"text": _contact_text(message)}
+        elif message.kind == "link":
+            body = {"text": link_text(message)}  # the label and the address, as text
         else:
             body = {"text": message.text}
         if not body["text"].strip():

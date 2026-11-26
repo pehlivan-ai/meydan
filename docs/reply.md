@@ -63,9 +63,10 @@ with your own `Field(description=...)`.
 
 ## Attachments: what goes after the bubbles
 
-A map pin, a photo, a contact card, choices to tap. The model doesn't write the address, the
-image or the number: it **names a thing** (a venue's slug, an event's id, a purpose) and your
-code finds the real value. A made-up name then sends nothing, instead of a made-up address.
+A map pin, a photo, a contact card, a link button, choices to tap. The model doesn't write the
+address, the image, the number or the URL: it **names a thing** (a venue's slug, an event's id, a
+purpose) and your code finds the real value. A made-up name then sends nothing, instead of a
+made-up address.
 
 Most of the time the thing is a row in one of your tables. Declare it, and meydan writes
 `resolve` (one SELECT through the session you pass as `ctx`):
@@ -169,6 +170,7 @@ messages = result.output.outbound(ctx)  # bubbles, then each attachment's messag
 | `Location` | `Place(lat, lng, name, address, url)` | a map pin, and `url` right after it if set |
 | `Image` | `ImageRef(media, alt, caption)` (a key from `meydan.media.put`) | a photo |
 | `Contact` | `Person(name, phone, title, org)` | a contact card |
+| `Link` | `LinkRef(url, label, text, recall, ref)` (an https address your code built) | a text with one button that opens the page |
 | `Choices` | nothing to resolve: the model writes the question and the options | buttons or a list |
 
 - Each type has a fixed `type` (a `Literal`): the schema tells them apart by it.
@@ -222,6 +224,45 @@ in one tap (`phone` E.164 with "+"). On WhatsApp the card carries the number's W
 shows "Message" and "Save contact" (without one WhatsApp would offer only "Invite"); on Telegram it
 is a contact. `text` keeps the name, title, organisation and number for transcripts. As with a
 pin, let the model ask for the card by a field and fill the number in from your own settings.
+
+## A link
+
+`Outbound.link_message(body, label, url)`: a text with one button that opens a web page (since
+v0.49.0). `url` is an absolute https address and is **built by your code, never by a model**:
+subclass `Link`, let the model name the thing (an order, a booking), and make the address in
+`resolve`.
+
+```python
+from meydan.reply import Link, LinkRef
+
+
+class PayLink(Link):
+    type: Literal["pay"] = "pay"
+    when = "After they ordered, when the order is waiting for payment."
+    order: str = Field(description="The order's id, from a tool result.")
+
+    def resolve(self, ctx) -> LinkRef | None:
+        order = orders.payable(ctx.session, ctx.actor_id, self.order)  # theirs, and payable
+        if order is None:
+            return None  # nothing is sent
+        return LinkRef(
+            pay_url(order), "Pay", f"{order.name}: {order.amount_text}", ref=f"order:{order.id}"
+        )
+```
+
+- WhatsApp: an interactive call-to-action URL button (`cta_url`): the text up to 1024 characters,
+  the label up to 20 (`whatsapp.check_link(message)` raises `ValueError` when it doesn't fit).
+  Telegram: an inline URL button. Instagram, and anything else: the text, then `label: url`
+  (`link_text(message)`).
+- `text` keeps the body and `[link: label]`, **not the address**, so an agent reading the
+  conversation later knows the button went out but never reads the URL (which may be a bearer
+  link). `recall` replaces it, as for any message ([privacy.md](privacy.md)).
+- The `Link` attachment adds its text form as the `fallback`: should the channel refuse the button
+  for good, the label and the address still arrive (and the model still doesn't read them).
+- `Link.of(table, by=..., url=..., label=..., text=...)` declares one from a row; `url` may be a
+  callable over the row (a row without an address sends nothing).
+- Free-form, like choices: WhatsApp sends it only inside the 24 h window. Outside it, a template
+  with a URL button (`template_message(..., url_suffix=...)`, [templates.md](templates.md)).
 
 ## None of this is required
 
