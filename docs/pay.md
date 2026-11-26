@@ -98,15 +98,31 @@ are a connection's; a test key never meets a live subject (the app's rule, enfor
 Provider errors map to reasons by status and code, never by the provider's text. Nothing a
 provider sends is logged with personal data.
 
+**Available since 0.50.0** (`meydan.pay.checkout`): checkouts, the provider protocol and the
+sweep, for the browser-result shape (verify the signature, then fetch the status). The other
+shapes and the `embed` mode come with the pay page API.
+
 ```python
 class Provider(Protocol):
     name: str
-    embed: Literal["iframe", "redirect", "link"]
-    def needs(self) -> list[Need]: ...
-    def open(self, http, env, creds, checkout, person, consents, return_url, embed_origin) -> Opened: ...
-    def status(self, http, env, creds, checkout) -> Status: ...
-    def verify(self, creds, result) -> Result | None: ...          # browser or callback result
+    needs: tuple[Need, ...]  # what it needs from the person: name, email, phone (region, mobile)
+    consents: tuple[str, ...]  # the consents it needs, by its own names
+
+    def base_url(self, environment: str) -> str: ...  # test | live
+    def open(self, http, base_url, token, request: OpenRequest) -> Session | Refused: ...
+    def status(self, http, base_url, token, session_id, reference) -> Status: ...
+    def signed(self, secret, result: Result) -> bool: ...  # the browser's result, timing-safe
 ```
+
+`Checkouts(engine, tables, table, keyring, providers, subjects)` opens a session
+(`open`: `pending`, or `refused` / `error` with a `Reason`; a reference the provider saw before is
+retried once under a new checkout), applies a status once (`apply`: one audit row
+`checkout:<status>:<provider>` and one call of the subject's handler per change), takes a browser
+result as a hint (`apply_result`: signature with the connection's `hmac`, then `refresh` asks the
+provider with its `token`), and sweeps (`sweep` / `run`). `requirements(provider, have)` compares
+what the app knows about the person with what the provider needs. Our setup going wrong (no
+keyring, a connection off, a token refused) is a `ConfigError`: loud in the logs, never shown to
+the person.
 
 ## Opening a due
 
@@ -122,10 +138,10 @@ Rules in code, per subject kind:
 
 ```python
 notices = [
-    pay.Opened(card=pay_card),                          # the pay card
-    pay.Paid(card=paid_card),                           # the confirmation
-    pay.Abandoned(after=timedelta(hours=2)),            # a checkout opened, nothing paid
-    pay.Before("deadline", timedelta(hours=24)),        # one reminder
+    pay.Opened(card=pay_card),  # the pay card
+    pay.Paid(card=paid_card),  # the confirmation
+    pay.Abandoned(after=timedelta(hours=2)),  # a checkout opened, nothing paid
+    pay.Before("deadline", timedelta(hours=24)),  # one reminder
 ]
 ```
 

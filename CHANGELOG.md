@@ -6,6 +6,24 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.50.0] - 2026-11-27
+### Added
+- `meydan.pay` (experimental; `meydan[pay]`), taking a payment for something an app sells from a
+  conversation, by its design in docs/pay.md. First part: `meydan.pay.checkout`, one attempt to
+  pay through the seller's own provider. `define_table(metadata, prefix=, name="pay_checkouts")`;
+  `Checkouts.open` (pending, or refused / error with a `Reason`; a used reference retried once),
+  `apply` (a status applied once: an audit row and one call of the subject's handler per change),
+  `apply_result` (the browser's result is a hint: the signature with the connection's `hmac`, then
+  the status from the provider decides), `refresh`, `sweep` / `run` (open sessions often, paid
+  ones daily until `watch_until`). The `Provider` protocol (`needs`, `consents`, `base_url`,
+  `open`, `status`, `signed`), `requirements` and `clean` (what the provider needs against what is
+  known; phones by libphonenumber), errors by status and code, never a provider's text.
+- docs/pay.md: the plan (dues, notices that join the turn, the pay page API, the ledger).
+
+### Upgrading
+- New optional extra `pay`. An app that had its own copy of the checkouts table keeps it by
+  passing `name=` (the columns, constraints and index names are the same).
+
 ## [0.49.0] - 2026-11-26
 ### Added
 - Links: `Outbound.link_message(body, label, url)` (kind `link`): a text with one button that
