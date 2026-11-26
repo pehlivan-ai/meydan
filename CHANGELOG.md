@@ -6,6 +6,11 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.51.1] - 2026-11-27
+### Added
+- `Dues(kind=)`: the kind its links' expectations are recorded as (default `pay`), so an app that
+  had pay links of its own keeps them working.
+
 ## [0.51.0] - 2026-11-27
 ### Added
 - `meydan.pay.dues` (experimental): what an actor owes for one of the app's subjects, until a

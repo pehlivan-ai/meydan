@@ -193,3 +193,13 @@ def test_cancelling_closes_the_link_and_a_new_due_gets_a_new_one(world):
         assert orders.heard == [("cancelled", "13")]
         fresh, new_token = dues.open(c, "order:13", actor)
         assert fresh.id != due.id and new_token != token
+
+
+def test_an_apps_own_link_kind_is_kept(world):
+    engine, t, _, dues, _, _, actor = world
+    mine = Dues(t, dues.table, dues.keyring, dues.subjects, kind="payment", now=dues.now)
+    with engine.begin() as c:
+        due, token = mine.open(c, "order:14", actor)
+        assert c.scalar(select(t.expectations.c.kind)) == "payment"
+        assert mine.resolve(c, token).id == due.id
+        assert dues.resolve(c, token) is None  # another kind: not ours

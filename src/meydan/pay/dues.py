@@ -199,8 +199,9 @@ def _utcnow() -> datetime:
 class Dues:
     """Opening dues, their links, and what their checkouts mean. Built once (composition root).
 
-    `subjects`: subject kind -> its handler. `keyring` seals the links' tokens. `channel`: what the
-    link's expectations are recorded with (the page that takes the payment)."""
+    `subjects`: subject kind -> its handler. `keyring` seals the links' tokens. `kind` and
+    `channel`: what the links' expectations are recorded as (an app that had pay links of its
+    own before keeps their kind, so they still resolve)."""
 
     def __init__(
         self,
@@ -209,11 +210,12 @@ class Dues:
         keyring: Keyring,
         subjects: Mapping[str, Subject],
         *,
+        kind: str = KIND,
         channel: str = "web",
         now: Callable[[], datetime] = _utcnow,
     ):
         self.tables, self.table, self.keyring = tables, table, keyring
-        self.subjects, self.channel, self.now = dict(subjects), channel, now
+        self.subjects, self.kind, self.channel, self.now = dict(subjects), kind, channel, now
 
     def subject(self, kind: str) -> Subject:
         try:
@@ -247,7 +249,7 @@ class Dues:
     def resolve(self, conn: Connection, token: str) -> Due | None:
         """The due a pay link is for, while it opens: open and in time; or paid, until its
         `readable_until` (the person's own "paid" page). None for anything else."""
-        e = expect.by_token(conn, self.tables, token, kind=KIND)
+        e = expect.by_token(conn, self.tables, token, kind=self.kind)
         if e is None or e.key is None:
             return None
         due = self.get(conn, uuid.UUID(e.key))
@@ -299,7 +301,7 @@ class Dues:
 
     def _new_link(self, conn: Connection, due_id: uuid.UUID, deadline: datetime) -> str:
         e, token = expect.expect(
-            conn, self.tables, kind=KIND, channel=self.channel, options=[PAID],
+            conn, self.tables, kind=self.kind, channel=self.channel, options=[PAID],
             ttl=self._ttl(deadline), key=str(due_id), data={"due": str(due_id)},
             on_pending="allow",
         )  # fmt: skip
