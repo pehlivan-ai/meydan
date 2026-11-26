@@ -10,9 +10,8 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import Connection, exists, func, or_, select, update
-from sqlalchemy.dialects.postgresql import distinct_on
 
-from meydan.channels.base import Address, Inbound, Outbound, seen_kind
+from meydan.channels.base import Address, Inbound, Outbound
 from meydan.observe.context import TurnContext, turn_scope
 from meydan.observe.record import write_turn
 from meydan.runtime.failures import Failure, classify
@@ -35,56 +34,9 @@ def _taken_over(conn: Connection, t: RuntimeTables, conversation_id: uuid.UUID) 
 
 
 class Worker(_Part):
-    def _due_reads(self) -> list[dict[str, Any]]:
-        after = self.presence.read_after_s
-        if after is None:
-            return []
-        i = self.t.inbox
-        # The latest unread message of each conversation; marking it read covers earlier ones.
-        q = (
-            select(i.c.conversation_id, i.c.to, i.c.message_id, i.c.received_at)
-            .where(
-                i.c.read_at.is_(None),
-                i.c.processed_at.is_(None),  # answered messages need no separate "seen"
-                i.c.received_at <= _clock() - timedelta(seconds=after),
-                *self._ours(),
-            )
-            .order_by(i.c.conversation_id, i.c.sent_at.desc(), i.c.id.desc())
-            .ext(distinct_on(i.c.conversation_id))
-            .limit(self.cfg.batch)
-        )
-        with self.engine.connect() as conn:
-            return [dict(r) for r in conn.execute(q).mappings()]
-
     def _ours(self) -> list:
         """Only this runtime's channel's messages (`Runtime.serves`); every one without a name."""
         return [self.t.inbox.c.channel == self.serves] if self.serves else []
-
-    def _set_read(self, conversation_id: uuid.UUID, up_to: datetime) -> None:
-        i = self.t.inbox
-        with self.engine.begin() as conn:
-            conn.execute(
-                update(i)
-                .where(
-                    i.c.conversation_id == conversation_id,
-                    i.c.read_at.is_(None),
-                    i.c.received_at <= up_to,
-                )
-                .values(read_at=_clock())
-            )
-
-    async def read_once(self) -> int:
-        """Send due read receipts (presence.read_after_s). Returns how many conversations."""
-        due = await asyncio.to_thread(self._due_reads)
-        mark_read = getattr(self.channel, "mark_read", None)
-        for row in due:
-            if mark_read is not None:
-                try:  # cosmetic: never let it break anything
-                    await mark_read(row["to"], row["message_id"])
-                except Exception:
-                    log.warning("read receipt failed for %s", row["conversation_id"], exc_info=True)
-            await asyncio.to_thread(self._set_read, row["conversation_id"], row["received_at"])
-        return len(due)
 
     def _due_conversations(self) -> list[uuid.UUID]:
         i = self.t.inbox
@@ -102,8 +54,16 @@ class Worker(_Part):
             )
             .group_by(i.c.conversation_id)
             .having(
-                (func.max(i.c.received_at) <= now - timedelta(seconds=self.cfg.debounce_s))
-                | (func.min(i.c.received_at) <= now - timedelta(seconds=self.cfg.max_wait_s))
+                (
+                    (func.max(i.c.received_at) <= now - timedelta(seconds=self.cfg.debounce_s))
+                    | (func.min(i.c.received_at) <= now - timedelta(seconds=self.cfg.max_wait_s))
+                )
+                # Every message's content is in the system (a photo kept), or waited for long
+                # enough (meydan.runtime.ingest): a turn never answers a photo it can't see yet.
+                & func.bool_and(
+                    i.c.ingested_at.is_not(None)
+                    | (i.c.received_at <= now - timedelta(seconds=self.cfg.ingest_wait_s))
+                )
             )
             .order_by(func.min(i.c.received_at))
             .limit(self.cfg.batch)
@@ -150,38 +110,6 @@ class Worker(_Part):
         ).mappings()
         return [dict(r) for r in rows]
 
-    async def _keep_media(self, conn: Connection, rows: list[dict[str, Any]]) -> None:
-        """Keep the files in these messages (photos) before the turn, so the agent and the team
-        can see them. A file that can't be fetched leaves the message as it is: the turn still
-        runs, the agent reads "[image]" (logged; no address or content in the log)."""
-        download = getattr(self.channel, "download_media", None)
-        if download is None or not self.cfg.fetch_media:
-            return
-        for r in rows:
-            if seen_kind(r["kind"], r["payload"]) not in self.cfg.fetch_media or r.get("media"):
-                continue  # a photo sent as a file counts as a photo (seen_kind)
-            try:
-                got = await download(_inbound(r))
-                if got is not None:
-                    r["media"] = await asyncio.to_thread(self._store_media, conn, r["id"], *got)
-            except Exception as e:  # noqa: BLE001 - the turn goes on without the file
-                log.warning("media of inbox %s not kept: %s", r["id"], e)
-
-    def _store_media(self, conn: Connection, inbox_id: uuid.UUID, data: bytes, mime: str) -> str:
-        """The file in its own transaction, committed now: the agent's handler reads it on
-        another connection while this turn's is still open. The inbox row points at it in the
-        turn's transaction (a turn put back leaves the file; the next try finds it by its hash)."""
-        from meydan import media  # noqa: PLC0415
-
-        with self.engine.begin() as own:
-            key = media.receive(
-                own, self.t, data, mime, store=self.rt.media_store,
-                max_edge=self.cfg.image_max_edge,
-            )  # fmt: skip
-        i = self.t.inbox
-        conn.execute(update(i).where(i.c.id == inbox_id).values(media=key))
-        return key
-
     async def _turn(self, key: uuid.UUID) -> int:
         conn = await asyncio.to_thread(self.engine.connect)
         try:
@@ -194,7 +122,6 @@ class Worker(_Part):
             if await asyncio.to_thread(_taken_over, conn, self.t, key):
                 trans.rollback()  # taken over meanwhile: left for after the handback
                 return 0
-            await self._keep_media(conn, rows)
             turn = _turn_from_rows(key, rows)
             last = rows[-1]["message_id"]
             started_at = await asyncio.to_thread(conn.scalar, select(_clock()))

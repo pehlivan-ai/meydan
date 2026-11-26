@@ -22,10 +22,12 @@ Two groups (docs/identity.md):
 from dataclasses import dataclass
 
 from sqlalchemy import (
+    ARRAY,
     BigInteger,
     CheckConstraint,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -60,6 +62,9 @@ COST_SOURCES = ("provider", "estimate", "mixed")
 # dead: a handler refused it for good, or it failed too often (docs/bridges.md).
 BRIDGE_EVENT_STATUSES = ("pending", "done", "ignored", "dead")
 CONNECTION_STATUSES = ("on", "off")
+# A subscriber's copy of a fact (meydan.events): pending, to be handled (from next_at); running,
+# claimed until lease_until; done; dead: refused for good, or failed max_attempts times.
+EVENT_DELIVERY_STATUSES = ("pending", "running", "done", "dead")
 # How they prove their requests to us: whsec, a shared secret (Standard Webhooks v1); whpk, their
 # public key (v2a, ed25519). Only these verify a request (bridge.connections.credentials).
 INBOUND_CREDENTIAL_KINDS = ("whsec", "whpk")
@@ -104,6 +109,9 @@ class RuntimeTables:
     connections: Table
     connection_credentials: Table
     bridge_rejections: Table
+    events: Table
+    event_subscriptions: Table
+    event_deliveries: Table
 
 
 def _in(column: str, values: tuple[str, ...]) -> str:
@@ -243,6 +251,9 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         Column("typing_at", DateTime(timezone=True)),
         # Set when a turn consumed this message (or gave up on it).
         Column("processed_at", DateTime(timezone=True)),
+        # Its content is in the system (text at once; a photo once kept, or given up on): only then
+        # is it "seen" and only then does it join a turn (meydan.events, docs/events.md).
+        Column("ingested_at", DateTime(timezone=True)),
         Column("attempts", Integer, nullable=False, server_default="0"),
         Column("error", Text),
         # A turn that failed for a passing reason waits until then (`meydan.runtime.failures`).
@@ -713,6 +724,75 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
     Index(f"ix_{prefix}bridge_rejections_connection_at", bridge_rejections.c.connection,
           bridge_rejections.c.at)  # fmt: skip
 
+    # Facts and their subscribers (meydan.events, docs/events.md): a fact is written once where it
+    # happened (`emit`, in that transaction); each subscription whose kinds and channel match gets
+    # its own delivery row, claimed with SKIP LOCKED, retried with backoff, dead after max_attempts.
+    events = Table(
+        f"{prefix}events",
+        metadata,
+        id_col(),
+        Column("kind", String(120), nullable=False),  # "message.received", "app.something"
+        Column("key", String(255)),  # the producer's idempotency key: one fact per (kind, key)
+        Column("subject_id", UUID(as_uuid=True)),  # what it is about (an inbox row, a turn)
+        Column("channel", String(20)),  # whose runtime it concerns; None: every channel
+        Column("data", JSONB, nullable=False, server_default=text("'{}'::jsonb")),
+        now_col("at"),
+        UniqueConstraint("kind", "key"),
+    )
+    Index(f"ix_{prefix}events_at", events.c.at)
+    # Who wants which facts: written by each process at start (Events.register), so a fact emitted
+    # in one process reaches a subscriber that runs in another. Removed with Events.unsubscribe.
+    event_subscriptions = Table(
+        f"{prefix}event_subscriptions",
+        metadata,
+        Column("name", String(120), primary_key=True),
+        Column("kinds", ARRAY(String(120)), nullable=False),
+        Column("channel", String(20)),  # None: facts of every channel
+        Column("delay_s", Float, nullable=False, server_default="0"),  # not before at + delay_s
+        Column("max_attempts", Integer, nullable=False, server_default="8"),
+        now_col("registered_at"),
+    )
+    event_deliveries = Table(
+        f"{prefix}event_deliveries",
+        metadata,
+        id_col(),
+        Column("event_id", UUID(as_uuid=True), ref("events", ondelete="CASCADE"), nullable=False),
+        Column(
+            "subscriber",
+            String(120),
+            ForeignKey(f"{prefix}event_subscriptions.name", ondelete="CASCADE"),
+            nullable=False,
+        ),
+        Column("status", String(16), nullable=False, server_default="pending"),
+        Column("attempts", Integer, nullable=False, server_default="0"),
+        Column("max_attempts", Integer, nullable=False),
+        now_col("next_at"),
+        Column("lease_until", DateTime(timezone=True)),
+        Column("last_error", Text),
+        Column("done_at", DateTime(timezone=True)),
+        UniqueConstraint("subscriber", "event_id"),
+        CheckConstraint(_in("status", EVENT_DELIVERY_STATUSES), name="status"),
+        CheckConstraint("(status IN ('done', 'dead')) = (done_at IS NOT NULL)", name="finished"),
+    )
+    # Claim: a subscriber's due rows, the time as a key column (fast with many deferred rows).
+    Index(
+        f"ix_{prefix}event_deliveries_due",
+        event_deliveries.c.subscriber,
+        event_deliveries.c.next_at,
+        postgresql_where=event_deliveries.c.status == "pending",
+    )
+    Index(
+        f"ix_{prefix}event_deliveries_lease",
+        event_deliveries.c.lease_until,
+        postgresql_where=event_deliveries.c.status == "running",
+    )
+    Index(
+        f"ix_{prefix}event_deliveries_done",
+        event_deliveries.c.done_at,
+        postgresql_where=event_deliveries.c.done_at.is_not(None),
+    )
+    Index(f"ix_{prefix}event_deliveries_event", event_deliveries.c.event_id)
+
     return RuntimeTables(
         actors=actors,
         identities=identities,
@@ -744,4 +824,7 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         connections=connections,
         connection_credentials=connection_credentials,
         bridge_rejections=bridge_rejections,
+        events=events,
+        event_subscriptions=event_subscriptions,
+        event_deliveries=event_deliveries,
     )

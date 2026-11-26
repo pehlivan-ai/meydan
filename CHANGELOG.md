@@ -6,6 +6,47 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.47.0] - 2026-11-26
+### Added
+- `meydan.events` (docs/events.md): facts and their subscribers. `emit(conn, tables, kind, key=,
+  subject_id=, channel=, data=)` writes a fact in the caller's transaction and a delivery for each
+  matching subscription; `Subscriber(name, kinds, handle, channel=, delay_s=, max_attempts=,
+  lease_s=)`; `Events(engine, tables, subscribers).run(stop)` / `drain_once()`; handler outcomes
+  None, `Later(seconds)`, `PermanentError`, any other error (backoff, then dead); `retry`,
+  `unsubscribe`, `Events.rescue`, `prune`, `backlog`. Subscriptions are rows, so a subscriber in
+  one process gets facts emitted in another.
+- `Runtime(..., subscribers=[...])`, `Runtime.events`, `Runtime.events_once()`; `Health.events_s`
+  and `events_dead` (counted in `ok`).
+- `meydan.runtime.ingest`: a message is *ingested* once its content is in the system: text at once,
+  a photo once `Ingest` (subscriber of `message.received`) has kept it. Facts `message.received`,
+  `message.ingested`. `RuntimeConfig.ingest_wait_s` (20 s).
+- `seen_kind`: an `unsupported` message reads as what WhatsApp says it was (`[album]`).
+
+### Changed
+- "Seen" is a subscriber of `message.ingested` (`Seen`), `read_after_s` after arrival: per message
+  (an album's photos share one second, so "the latest" was not always the last), only once its
+  content is in the system, and a refused read receipt is recorded and tried again.
+- A turn waits until its messages are ingested (at most `ingest_wait_s`): a photo is fetched right
+  after arrival by `Ingest`, no longer inside the turn.
+- `WhatsAppCloud.mark_read` raises when WhatsApp refuses (it swallowed every error).
+
+### Deprecated
+- `Runtime.read_once`: runs `events_once` and warns; use `events_once`. To be removed in a later
+  release.
+
+### Removed
+- The reader loop (`Worker.read_once`, `_due_reads`, `_set_read`) and the worker's in-turn fetch
+  (`_keep_media`): replaced by the subscribers above.
+
+### Upgrading
+- New tables `<prefix>events`, `<prefix>event_subscriptions`, `<prefix>event_deliveries` and the
+  column `<prefix>inbox.ingested_at` (nullable): generate a migration (expand only; the previous
+  release runs on it). Optionally mark messages already answered as ingested:
+  `UPDATE <prefix>inbox SET ingested_at = received_at WHERE processed_at IS NOT NULL`; unanswered
+  older ones wait `ingest_wait_s` once, then go on.
+- Nothing else to change: the runtime registers and runs its own subscribers. Give yours with
+  `Runtime(subscribers=[...])`.
+
 ## [0.46.0] - 2026-11-26
 ### Added
 - `meydan.channels.base.seen_kind(kind, payload)`: a photo sent "as a file" (a document whose

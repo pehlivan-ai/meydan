@@ -2,18 +2,20 @@
 ready for a model), the agent sees them when the app says its model reads images, observe shows
 them to whom may see the conversation, and they are forgotten after the app's retention."""
 
+import asyncio
 import io
 import json
 import uuid
 from datetime import timedelta
 
 import httpx
+import pytest
 from conftest import T0, FakeChannel, receive, runtime
 from PIL import Image
 from pydantic_ai import Agent
 from pydantic_ai.messages import BinaryContent, ModelResponse, ToolCallPart
 from pydantic_ai.models.function import FunctionModel
-from sqlalchemy import func, select, update
+from sqlalchemy import func, select, text, update
 
 from meydan import media
 from meydan.agent import handler, history
@@ -21,6 +23,7 @@ from meydan.channels.base import Address, Inbound
 from meydan.channels.telegram import Telegram
 from meydan.channels.whatsapp import WhatsAppCloud
 from meydan.reply import Reply
+from meydan.runtime import Presence
 from meydan.runtime.conversation import Said
 
 
@@ -123,6 +126,7 @@ async def test_the_worker_keeps_a_photo_before_the_turn_and_the_transcript_point
     ch = PhotoChannel()
     rt = runtime(db, reply, channel=ch)
     receive(rt, [image_message("w1", "afiş bu mu?")])
+    await rt.events_once()  # Ingest: fetched and kept
     await rt.work_once()
     [turn] = turns
     key = turn.messages[0].media
@@ -142,10 +146,14 @@ async def test_a_photo_that_cannot_be_fetched_still_gets_its_turn(db):
         turns.append(turn)
         return []
 
-    rt = runtime(db, reply, channel=PhotoChannel(fail=True))
+    rt = runtime(db, reply, channel=PhotoChannel(fail=True), ingest_wait_s=0)
     receive(rt, [image_message("w1")])
+    await rt.events_once()  # Ingest fails: tried again later; the turn doesn't wait (wait 0)
     await rt.work_once()
     assert [m.media for m in turns[0].messages] == [None]
+    with rt.engine.connect() as c:
+        d = c.execute(select(rt.t.event_deliveries)).one()
+    assert d.status == "pending" and "404" in d.last_error  # recorded, retried with backoff
 
 
 async def test_received_photos_are_forgotten_after_the_retention(db):
@@ -154,6 +162,7 @@ async def test_received_photos_are_forgotten_after_the_retention(db):
 
     rt = runtime(db, reply, channel=PhotoChannel(), keep_received=timedelta(days=30))
     receive(rt, [image_message("w1")])
+    await rt.events_once()  # Ingest: fetched and kept
     await rt.work_once()
     assert rt.forget_received_once() == 0  # still young
     with rt.engine.begin() as c:
@@ -174,6 +183,7 @@ async def test_a_file_we_also_sent_is_not_forgotten(db):
     data = photo(100, 100)
     rt = runtime(db, reply, channel=PhotoChannel(data))
     receive(rt, [image_message("w1")])
+    await rt.events_once()  # Ingest: fetched and kept
     await rt.work_once()
     with engine.begin() as c:
         key = c.scalar(select(t.inbox.c.media))
@@ -216,6 +226,7 @@ async def test_with_images_on_the_turns_photo_goes_to_the_model_as_bytes(db):
                           images=True)  # fmt: skip
     rt = runtime(db, reply, channel=PhotoChannel())
     receive(rt, [image_message("w1", "bu afiş mi?")])
+    await rt.events_once()  # Ingest: fetched and kept
     await rt.work_once()
     [image, text] = seeing.prompt
     assert isinstance(image, BinaryContent) and image.media_type == "image/jpeg"
@@ -231,6 +242,7 @@ async def test_without_images_the_model_reads_only_text(db):
 
     rt = runtime(db, reply, channel=PhotoChannel())
     receive(rt, [image_message("w1", "bu afiş mi?")])
+    await rt.events_once()  # Ingest: fetched and kept
     await rt.work_once()
     assert seeing.prompt == "[image] bu afiş mi?"
 
@@ -262,6 +274,7 @@ async def test_the_team_sees_a_received_photo_like_the_message_it_came_in(db):
 
     rt = runtime(db, reply, channel=PhotoChannel())
     receive(rt, [image_message("w1")])
+    await rt.events_once()  # Ingest: fetched and kept
     await rt.work_once()
     engine, t = db
 
@@ -309,8 +322,10 @@ async def test_a_photo_sent_as_a_file_is_kept_and_read_as_a_photo_a_pdf_is_not(d
     ch = PhotoChannel()
     rt = runtime(db, reply, channel=ch)
     receive(rt, [document_message("d1", "image/png", "ne bu")])
+    await rt.events_once()  # Ingest: fetched and kept
     await rt.work_once()
     receive(rt, [document_message("d2", "application/pdf")])
+    await rt.events_once()  # Ingest: fetched and kept
     await rt.work_once()
     assert ch.asked == ["d1"]  # the PDF is not downloaded
     assert turns[0].messages[0].media and turns[1].messages[0].media is None
@@ -318,3 +333,65 @@ async def test_a_photo_sent_as_a_file_is_kept_and_read_as_a_photo_a_pdf_is_not(d
         conversation = c.scalar(select(rt.t.conversations.c.id))
         lines = rt.transcript(c, conversation)
     assert [x.text for x in lines] == ["[image] ne bu", "[document]"]
+
+
+# --- ingested, then seen, then the turn (meydan.runtime.ingest) ---------------------------------
+
+
+def time_passes(rt):
+    with rt.engine.begin() as c:
+        c.execute(update(rt.t.event_deliveries).values(next_at=text("now() - interval '1 s'")))
+
+
+async def test_a_photo_is_seen_and_answered_only_once_it_is_in_the_system(db):
+    turns = []
+
+    async def reply(turn):
+        turns.append(turn)
+        return []
+
+    ch = PhotoChannel()
+    rt = runtime(db, reply, channel=ch, presence=Presence(read_after_s=1, typing=False))
+    receive(rt, [image_message("w1", "afiş")])
+    assert await rt.work_once() == 0  # not before the photo is in
+    time_passes(rt)
+    assert ("read", "w1") not in ch.events
+    await rt.events_once()  # Ingest; "seen" now due a second after
+    assert ("read", "w1") not in ch.events
+    time_passes(rt)
+    await rt.events_once()
+    assert ("read", "w1") in ch.events
+    assert await rt.work_once() == 1 and turns[0].messages[0].media
+
+
+async def test_ingest_never_waits_on_a_message_a_turn_holds(db):
+    engine, t = db
+
+    async def reply(turn):
+        return []
+
+    rt = runtime(db, reply, channel=PhotoChannel())
+    receive(rt, [image_message("w1")])
+    with engine.begin() as held:  # a turn that went ahead holds the row while the model thinks
+        held.execute(select(t.inbox).with_for_update())
+        await asyncio.wait_for(rt.events_once(), timeout=5)
+    with engine.connect() as c:
+        d = c.execute(select(t.event_deliveries)).one()
+        assert c.scalar(select(t.inbox.c.ingested_at)) is None
+    assert d.status == "pending" and d.attempts == 0  # Later: not counted, tried again soon
+
+
+def test_an_album_reads_as_one():
+    from meydan.channels.base import describe, seen_kind
+
+    payload = {"type": "unsupported", "unsupported": {"type": "album"}}
+    assert describe(seen_kind("unsupported", payload), "") == "[album]"
+
+
+async def test_read_once_still_works_and_says_it_is_deprecated(db):
+    async def reply(turn):
+        return []
+
+    rt = runtime(db, reply)
+    with pytest.warns(DeprecationWarning, match="events_once"):
+        assert await rt.read_once() == 0

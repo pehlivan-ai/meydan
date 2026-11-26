@@ -79,6 +79,10 @@ def seen_kind(kind: str, payload: dict[str, Any] | None) -> str:
         mime = str(((payload or {}).get("document") or {}).get("mime_type") or "")
         if mime.startswith("image/"):
             return "image"
+    if kind == "unsupported":  # WhatsApp names what it couldn't give us: "album", "poll_creation"
+        inner = ((payload or {}).get("unsupported") or {}).get("type")
+        if inner:
+            return str(inner)
     return kind
 
 

@@ -685,12 +685,12 @@ class WhatsAppCloud:
         return data["messages"][0]["id"]
 
     async def mark_read(self, from_number: str, message_id: str) -> None:
-        """Mark a received message (and everything before it) read: "seen". Best effort."""
-        with contextlib.suppress(Exception):
-            await self._post(
-                from_number,
-                {"messaging_product": "whatsapp", "status": "read", "message_id": message_id},
-            )
+        """Mark a received message (and everything before it) read: "seen". Raises SendError
+        when WhatsApp refuses (the caller records it: meydan.events retries the "seen")."""
+        await self._post(
+            from_number,
+            {"messaging_product": "whatsapp", "status": "read", "message_id": message_id},
+        )
 
     async def typing(self, from_number: str, message_id: str) -> None:
         """Mark a received message read and show the typing indicator. Best effort."""

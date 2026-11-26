@@ -32,8 +32,10 @@ Who is who (actors, identities, claims) and how messages find their conversation
 ```
 channel webhook ─► inbound queue (idempotent on message id) ─► 200 OK
                          │
-        reader: "seen" ~1 s after arrival (docs/presence.md)
-        worker: one turn per conversation at a time (Postgres advisory lock)
+        events: message.ingested (a photo once kept) ─► "seen" ~1 s after arrival
+                (docs/events.md, docs/presence.md)
+        worker: one turn per conversation at a time (Postgres advisory lock),
+           once its messages are ingested
            debounce bursts ─► personal agent turn ─► tools / planner intents
                          │
         outbound queue ─► sender (typing indicator, bubbles, channel API, status receipts)
@@ -100,6 +102,7 @@ language) without touching the others. Postgres is the only infrastructure.
 | 4 Outbox | Transactional Outbox | never send a reply for state that didn't commit, never lose a reply for state that did |
 | 5 Sender | Rate Limiter, Retry with backoff + jitter, Circuit Breaker, Dead Letter Channel | pair rate limits, transient API errors, and no infinite retries |
 | 6 Statuses | Correlation Identifier (`wamid`) | asynchronous delivery results; feeds reliability and the 24 h window logic |
+| Events | Publish-Subscribe with a copy per subscriber, Competing Consumers (SKIP LOCKED), Idempotent Consumer, Dead Letter in place | what follows a fact (seen, a file kept, the team told) runs per subscriber, at its own pace, retried; never a shared log read by position (late commits) or below the oldest open transaction (a turn's) |
 
 ### n:n relationships
 The integration is many-to-many at several levels, so meydan never assumes "one number, one

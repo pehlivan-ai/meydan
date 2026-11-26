@@ -103,6 +103,9 @@ class RuntimeConfig:
     # A reaction (an emoji on a message) is recorded and read back in the transcript, but opens
     # no turn: nobody answers a 🙏. True: the agent gets a turn for it like any message.
     answer_reactions: bool = False
+    # A turn waits for its messages' content to be in the system (a photo downloaded and kept,
+    # meydan.runtime.ingest), at most this long after a message arrived; then it goes without.
+    ingest_wait_s: float = 20.0
     # What people send as files, kept before the turn (the channel's `download_media`, then
     # meydan.media.receive) so an agent can see it and the team can open it. Kinds by the
     # channel's name for them; empty: nothing is fetched.

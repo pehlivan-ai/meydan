@@ -7,7 +7,7 @@ takes a while keeps showing them typing. The runtime does the same, in this orde
 
 | Step | When (default) | Setting |
 |---|---|---|
-| Seen | ~1 s after a message arrives; during a burst, each new message again after ~1 s | `read_after_s` |
+| Seen | ~1 s after a message arrives, once its content is in the system (a photo kept); each message, and a refused receipt is tried again (`meydan.events`, docs/events.md) | `read_after_s` |
 | Typing… | when the turn starts (the person stopped writing, `debounce_s`), never sooner than 0.8 s after seen | `typing`, `typing_after_read_s` |
 | Typing refresh | every 20 s while the reply is still being made (WhatsApp drops the indicator after 25 s); only acts on slow turns | `typing_refresh_s` |
 | Reply | bubbles paced like typing | `chars_per_second`, `max_bubble_gap_s` |

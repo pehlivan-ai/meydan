@@ -20,6 +20,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
+import warnings
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -28,9 +29,11 @@ from typing import TYPE_CHECKING
 from sqlalchemy import Connection, Engine, func, select
 
 from meydan.channels.base import Inbound, Outbound, StatusUpdate, TemplateUpdate
+from meydan.runtime import ingest
 from meydan.runtime.conversation import Said, transcript
 
 if TYPE_CHECKING:
+    from meydan.events import Subscriber
     from meydan.media import MediaStore
     from meydan.runtime.expect import Expectations
 from meydan.runtime.inbound import Receiver, Replied, replied_to
@@ -68,6 +71,9 @@ class Health:
     waiting_s: float
     sending_s: float
     dead_last_hour: int
+    # meydan.events: the oldest due delivery waiting (seconds), and deliveries given up (dead).
+    events_s: float = 0.0
+    events_dead: int = 0
 
 
 class Runtime:
@@ -88,6 +94,7 @@ class Runtime:
         expect: "Expectations | None" = None,
         on_receive: Sequence[Observer] = (),
         media_store: "MediaStore | None" = None,
+        subscribers: "Sequence[Subscriber]" = (),
     ):
         self.engine = engine
         self.t = tables
@@ -114,6 +121,13 @@ class Runtime:
         self._receiver = Receiver(self)
         self._outbox = Outbox(self)
         self._worker = Worker(self)
+        # Facts and who acts on them (meydan.events): the runtime's own (a message ingested, then
+        # seen: meydan.runtime.ingest) and the app's, run by the same loop.
+        from meydan.events import Events  # noqa: PLC0415
+
+        self.events = Events(
+            engine, tables, [*ingest.builtin(self), *subscribers], poll_s=self.cfg.poll_s
+        )
 
     def receive(
         self,
@@ -153,9 +167,20 @@ class Runtime:
         """See `transcript`."""
         return transcript(conn, self.t, conversation_id, limit)
 
+    async def events_once(self) -> int:
+        """Handle what is due for every subscriber once (a message ingested, seen; the app's):
+        `Events.drain_once`. Returns how many deliveries were handled."""
+        return await self.events.drain_once()
+
     async def read_once(self) -> int:
-        """See `Worker.read_once`."""
-        return await self._worker.read_once()
+        """Deprecated since 0.47: "seen" is a subscriber now (meydan.runtime.ingest). Runs
+        `events_once`; to be removed in a later release."""
+        warnings.warn(
+            "Runtime.read_once is deprecated: use Runtime.events_once (meydan.events)",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        return await self.events_once()
 
     async def work_once(self) -> int:
         """See `Worker.work_once`."""
@@ -195,15 +220,21 @@ class Runtime:
                 )
             )
         waiting_s, sending_s = float(waiting or 0), float(sending or 0)
+        backlog = self.events.backlog()
         return Health(
-            ok=waiting_s <= max_waiting_s and sending_s <= max_sending_s,
+            ok=waiting_s <= max_waiting_s
+            and sending_s <= max_sending_s
+            and backlog["oldest_s"] <= max_waiting_s,
             waiting_s=round(waiting_s, 1),
             sending_s=round(sending_s, 1),
             dead_last_hour=int(dead or 0),
+            events_s=round(backlog["oldest_s"], 1),
+            events_dead=backlog["dead"],
         )
 
     async def run(self, stop: asyncio.Event) -> None:
-        """Reader, worker and sender loops until `stop` is set. Run as a background task."""
+        """Events (ingest, seen, the app's subscribers), worker and sender loops until `stop`
+        is set. Run as a background task."""
 
         async def loop(step: Callable[[], Awaitable[int]], name: str) -> None:
             while not stop.is_set():
@@ -234,7 +265,7 @@ class Runtime:
                     await asyncio.wait_for(stop.wait(), timeout=self.cfg.media_sweep_s)
 
         await asyncio.gather(
-            loop(self.read_once, "reader"),
+            self.events.run(stop),
             loop(self.work_once, "worker"),
             loop(self.send_once, "sender"),
             sweep(),

@@ -146,6 +146,7 @@ are in Postgres, so the app needs no message broker and no cache.
 | `meydan.visibility` | What a signed-in person sees, applied inside the read models. | [visibility](docs/visibility.md) | available |
 | `meydan.operator` | A person on the team takes over a conversation, writes as themselves, and gives it back. | [operator](docs/operator.md) | available (`api`) |
 | `meydan.notify` | Web Push notifications to the team's own devices. | [notify](docs/notify.md) | available (`notify`) |
+| `meydan.events` | Facts and their subscribers: a fact written once where it happened; each subscriber gets its own copy, retried with backoff, dead with the reason, never held up by another. The runtime's "message ingested" and "seen" run on it. | [events](docs/events.md) | available (`runtime`) |
 | `meydan.booking` | An optional primitive for apps that book time: holds, confirmations, no overlaps, a waiting list. | [booking](docs/booking.md) | available |
 | `meydan.bridge` | Events from outside systems (a stakeholder's software, a payment provider): signed with Standard Webhooks (shared secret or public key), stored once, handled by your code in a worker with retries. Connections and their credentials (ours or theirs, rotating; a token for calling them, a secret they sign with) in the database. An event can complete an expectation (a reference in a link). `python -m meydan.bridge send` plays the other side. | [bridges](docs/bridges.md) | available (`runtime`, `bridge`, routes `api`) |
 | `meydan.vault` | Secrets sealed at rest (AES-256-GCM), keys that rotate. | `meydan.vault` docstring | available (`bridge`) |
@@ -273,6 +274,7 @@ Each recipe is a few lines in your app. The docs have the code.
 | send a file that you keep in your own storage | `meydan.media` | [media](docs/media.md) |
 | let a person on the team take over a conversation | `meydan.operator` | [operator](docs/operator.md) |
 | notify the team's phones | `meydan.notify` | [notify](docs/notify.md) |
+| act on something that happened, in its own time (and another process) | `meydan.events` | [events](docs/events.md) |
 | run an admin service next to your app | `meydan.auth`, `meydan.observe` | [getting-started](docs/getting-started.md#an-admin-service-next-to-your-app) |
 
 A recipe moves into meydan when several real apps need it. Until then, a few clear lines in your

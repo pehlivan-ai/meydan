@@ -9,7 +9,7 @@ from sqlalchemy import Connection, case, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from meydan.channels.base import REACTION, Inbound, StatusUpdate, TemplateUpdate
-from meydan.runtime import identity, templates
+from meydan.runtime import identity, ingest, templates
 from meydan.runtime.tables import RuntimeTables
 from meydan.runtime.types import _STATUS_RANK, Intercepted, _clock, _Part  # noqa: F401 (Intercepted: re-export)
 
@@ -55,6 +55,8 @@ class Receiver(_Part):
         """
         new = 0
         i = self.t.inbox
+        if messages:
+            self.rt.events.ensure_registered()  # subscriptions exist before the first fact
         for m in messages:
             seen = select(i.c.id).where(i.c.channel == m.channel, i.c.message_id == m.message_id)
             if conn.scalar(seen) is not None:
@@ -97,6 +99,8 @@ class Receiver(_Part):
                     observe(conn, m, routed)
                 if not self._intercept(conn, m, routed, inserted[0][0]):
                     self._settle_reaction(conn, m, inserted[0][0])
+                # Its content in the system now (text) or once fetched (a photo): meydan.events.
+                ingest.arrived(self.rt, conn, m, inserted[0][0])
         for s in statuses:
             self._apply_status(conn, s)
             if len(s.recipient) > 1:  # phone + BSUID in one signed receipt: the same person

@@ -1,4 +1,5 @@
-"""Presence: "seen" shortly after arrival, then "typing…" at the turn, refreshed while slow."""
+"""Presence: "seen" shortly after a message is in the system (meydan.runtime.ingest), then
+"typing…" at the turn, refreshed while slow."""
 
 import asyncio
 import time
@@ -24,18 +25,40 @@ def test_styles_and_validation():
         Presence.of("shy")
 
 
-async def test_reader_marks_the_latest_message_once_after_the_delay(db):
+def a_second_passes(rt):
+    """The database clock moves on: "seen" deliveries become due."""
+    with rt.engine.begin() as c:
+        c.execute(update(rt.t.event_deliveries).values(next_at=text("now() - interval '1 s'")))
+        c.execute(update(rt.t.inbox).values(received_at=text("now() - interval '2 s'")))
+
+
+async def test_each_message_is_seen_once_after_the_delay(db):
     ch = FakeChannel()
     rt = runtime(db, reply, ch, debounce_s=60, max_wait_s=120, presence=Presence(read_after_s=1))
     receive(rt, [msg("w1", "selam", T0), msg("w2", "nasılsın", T0 + timedelta(seconds=1))])
-    assert await rt.read_once() == 0  # not yet: just arrived
-    with rt.engine.begin() as c:  # a second passes (database clock)
-        c.execute(update(rt.t.inbox).values(received_at=text("now() - interval '2 s'")))
-    assert await rt.read_once() == 1
-    assert ch.events == [("read", "w2")]  # the latest one covers the burst
-    assert await rt.read_once() == 0  # once
+    assert await rt.events_once() == 0  # not yet: just arrived
+    a_second_passes(rt)
+    assert await rt.events_once() == 2
+    # Each one, whatever order the channel sent them in (a photo album shares one second).
+    assert sorted(ch.events) == [("read", "w1"), ("read", "w2")]
+    assert await rt.events_once() == 0  # once
     with rt.engine.connect() as c:
         assert all(r.read_at for r in c.execute(select(rt.t.inbox)))
+
+
+async def test_a_refused_read_receipt_is_recorded_and_tried_again(db):
+    class Refuses(FakeChannel):
+        async def mark_read(self, from_number, message_id):
+            raise RuntimeError("131000: try later")
+
+    rt = runtime(db, reply, Refuses(), debounce_s=60, max_wait_s=120)
+    receive(rt, [msg("w1", "selam", T0)])
+    a_second_passes(rt)
+    await rt.events_once()
+    with rt.engine.connect() as c:
+        d = c.execute(select(rt.t.event_deliveries)).one()
+        assert c.execute(select(rt.t.inbox.c.read_at)).scalar() is None  # not marked: not seen
+    assert d.status == "pending" and "131000" in d.last_error
 
 
 async def test_turn_shows_read_then_typing_with_the_gap(db):
@@ -76,7 +99,7 @@ async def test_quiet_shows_nothing(db):
     receive(rt, [msg("w1", "selam", T0)])
     with rt.engine.begin() as c:
         c.execute(update(rt.t.inbox).values(received_at=text("now() - interval '1 h'")))
-    assert await rt.read_once() == 0
+    assert await rt.events_once() == 0
     await rt.work_once()
     await rt.send_once()
     assert ch.events == [] and [s[2] for s in ch.sent] == ["tamam"]
@@ -87,9 +110,8 @@ async def test_answered_messages_get_no_separate_read_receipt(db):
     rt = runtime(db, reply, ch, presence=Presence(read_after_s=1, typing=False))
     receive(rt, [msg("w1", "selam", T0)])
     await rt.work_once()  # answered (typing off: nothing stamped read)
-    with rt.engine.begin() as c:
-        c.execute(update(rt.t.inbox).values(received_at=text("now() - interval '1 h'")))
-    assert await rt.read_once() == 0 and ch.events == []
+    a_second_passes(rt)
+    assert await rt.events_once() == 1 and ch.events == []  # handled: nothing to mark
 
 
 async def test_bubbles_stay_paced_after_a_slow_turn(db):
