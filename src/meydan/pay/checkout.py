@@ -61,7 +61,6 @@ from sqlalchemy import (
     func,
     insert,
     select,
-    text,
     update,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -127,7 +126,8 @@ def define_table(
         name,
         metadata,
         # The reference the provider keeps (externalReference): unique per attempt.
-        Column("id", UUID(as_uuid=True), primary_key=True, server_default=text("uuidv7()")),
+        # made here (meydan.ids.uuid7), not by Postgres: uuidv7() exists only from Postgres 18
+        Column("id", UUID(as_uuid=True), primary_key=True, default=uuid7),
         Column("subject", Text, nullable=False),  # what it pays for, the app's: "order:<uuid>"
         Column("actor_id", UUID(as_uuid=True), ForeignKey(f"{prefix}actors.id"), nullable=False),
         Column("connection", String(64), ForeignKey(f"{prefix}connections.name"), nullable=False),

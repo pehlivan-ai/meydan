@@ -6,6 +6,14 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.50.1] - 2026-11-27
+### Fixed
+- `meydan.pay.checkout.define_table`: the id is made by meydan (`meydan.ids.uuid7`), not by a
+  `uuidv7()` server default, which exists only from Postgres 18 (meydan supports 16+).
+
+### Upgrading
+- No change for a table created earlier: its server default stays and is not used.
+
 ## [0.50.0] - 2026-11-27
 ### Added
 - `meydan.pay` (experimental; `meydan[pay]`), taking a payment for something an app sells from a
