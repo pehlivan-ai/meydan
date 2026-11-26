@@ -7,11 +7,12 @@ team's, needs. docs/bridges.md.
 
 Who may do what is the app's: `may(principal, connection, action)` answers for `read` (see it,
 its credentials without values, its events and refused requests) and `manage` (create, accept,
-rotate, reveal, retire credentials; add a public key; retry an event; switch it on or off). It
-may be async (an OpenFGA check, say). `names(principal)` lists the connections to show (default:
-every connection the principal may read). `audit(conn, principal, action, connection)` records
-each change and each reveal, in the change's own transaction; actions are `secret:ours`,
-`secret:theirs`, `public-key`, `rotate`, `reveal`, `retire`, `retry`, `on`, `off`.
+rotate, reveal, retire credentials; add a public key, a token or an hmac secret of theirs; retry
+an event; switch it on or off). It may be async (an OpenFGA check, say). `names(principal)` lists
+the connections to show (default: every connection the principal may read). `audit(conn,
+principal, action, connection)` records each change and each reveal, in the change's own
+transaction; actions are `secret:ours`, `secret:theirs`, `token:theirs`, `hmac:theirs`,
+`public-key`, `rotate`, `reveal`, `retire`, `retry`, `on`, `off`.
 
 A generated or rotated secret is returned once in the answer. Nothing else carries a value:
 lists show kind, origin, fingerprint and validity. Showing a stored secret again is **off by
@@ -45,7 +46,9 @@ Audit = Callable[[Connection, Principal, str, str], None]
 
 class CredentialView(BaseModel):
     id: uuid.UUID
-    kind: str  # whsec (shared secret, v1) | whpk (their public key, v2a)
+    # whsec (shared secret, v1) | whpk (their public key, v2a): what their requests are checked
+    # with; token (we present it to their API) | hmac (they sign their results with it)
+    kind: str
     origin: str  # ours | theirs
     fingerprint: str
     valid_from: datetime
@@ -82,9 +85,13 @@ class RejectionView(BaseModel):
 
 
 class SecretIn(BaseModel):
-    """No `secret`: we generate one (ours). With `secret`: theirs, given to us."""
+    """No `secret`: we generate a shared secret (ours). With `secret`: theirs, given to us; `kind`
+    says what it is: a shared secret their requests are signed with (`whsec`), a `token` we
+    present to their API, or the `hmac` secret they sign their results with. Only a shared secret
+    can be generated here; a token or an hmac secret is theirs to give."""
 
-    secret: str | None = Field(default=None, max_length=200)
+    kind: Literal["whsec", "token", "hmac"] = "whsec"
+    secret: str | None = Field(default=None, max_length=cx.VALUE_MAX)
 
 
 class PublicKeyIn(BaseModel):
@@ -240,18 +247,22 @@ def routes(
 
     @router.post("/{name}/secrets")
     async def add_secret(name: str, body: SecretIn, person: signed_in) -> SecretOut:
-        """Ours (no `secret`: generated, returned once) or theirs (`secret`: theirs to keep)."""
+        """Ours (no `secret`: a shared secret, generated, returned once) or theirs (`secret`, of
+        `kind` whsec, token or hmac: theirs to keep, not returned)."""
         await allowed(person, name, "manage")
         by = f"actor:{person.actor_id}"
+        if body.kind != "whsec" and not body.secret:
+            raise HTTPException(422, f"A {body.kind} is theirs: send it as `secret`.")
 
         def go():
             if body.secret:
-                theirs = body.secret
+                theirs, kind = body.secret, body.kind
 
                 def store(conn):
-                    cx.add_secret(conn, t, keyring, name, theirs, by=by)
+                    cx.add_credential(conn, t, keyring, name, kind, theirs, by=by)
 
-                change(person, name, "secret:theirs", store)
+                action = "secret:theirs" if kind == "whsec" else f"{kind}:theirs"
+                change(person, name, action, store)
                 return SecretOut(fingerprint=cx.fingerprint(theirs))
 
             def make(conn):
@@ -337,7 +348,8 @@ def routes(
 
     @router.post("/{name}/status")
     async def set_status(name: str, body: StatusIn, person: signed_in) -> ConnectionView:
-        """Switch it on or off (off: its requests are answered 404)."""
+        """Switch it on or off (off: its requests are answered 404, and `connections.value`
+        gives none of its tokens or hmac secrets)."""
         await allowed(person, name, "manage")
 
         def go():

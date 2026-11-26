@@ -1,8 +1,9 @@
 # Bridges: outside systems talk to an instance
 
 Status: incoming events and expectations completed by an event are **available** (v0.40.0);
-connections with sealed credentials and public-key signatures (`v2a`) since v0.41.0. The rest of
-this page is the design they belong to.
+connections with sealed credentials and public-key signatures (`v2a`) since v0.41.0; credentials
+for calling them and checking what they sign (`token`, `hmac`) since v0.43.0. The rest of this
+page is the design they belong to.
 
 The README's island: "later, bridges connect it to other islands". A bridge is that link, and the
 other island may be another meydan instance or a system that is not meydan at all: a
@@ -29,8 +30,16 @@ them takes none of them (`meydan.bridge` is optional, like every primitive).
 | Word | Question | Examples |
 |---|---|---|
 | **Connection** | Is there a technical link, and which way? | a payment provider tells us (in), a weather API we call (out), a messaging platform (both) |
-| **Credential** | Who proves what? | their shared secret (`whsec_`, Standard Webhooks `v1`), their public key (`whpk_`, `v2a`), our API key to them, nothing (open data) |
+| **Credential** | Who proves what? | their shared secret (`whsec_`, Standard Webhooks `v1`), their public key (`whpk_`, `v2a`), the API token they gave us (`token`), the secret they sign their results with (`hmac`), nothing (open data) |
 | **Principal** | Are there people or agents on their side who sign in and act? | a stakeholder's staff on their own page; another instance's agents. Optional |
+
+A connection holds credentials for either direction. **In**: what their requests to us are
+checked with (`whsec`, `whpk`); only these ever verify a request. **Out**: what we need when we
+call them or read what they send back: a `token` we present to their API (as a bearer token, an
+API key header: the app's call), and an `hmac` secret they sign their results with (which
+algorithm and what exactly is signed is their format, so checking it is the app's code). Both
+are usually **theirs**. A connection may hold only one direction: one we only call has no
+`whsec`/`whpk`, so a request in its name is refused as unknown.
 
 What the relationship behind a connection is called (a business word) is the app's choice;
 meydan names only the technical link. When people on the other side sign in, they are one of
@@ -40,10 +49,12 @@ the app's **stakeholders** (README), with roles like anyone else.
 
 - **Connection**: one outside system an instance is linked to, by the app's name for it:
   whether it is on, its credentials (sealed, never in code). It acts only within its own scope.
-- **Credential**: how a connection proves itself. Kinds: a shared secret (`whsec_`, `v1`), or
-  their public key (`whpk_`, `v2a`: we hold nothing that could forge their events). Origin:
-  **ours** (we generated it and handed it over) or **theirs** (they generated it and gave it to
-  us). Each has a validity window, so a new one and the old one both work while they rotate.
+- **Credential**: how a connection proves itself, or what we prove ourselves with to it. Kinds:
+  a shared secret (`whsec_`, `v1`), or their public key (`whpk_`, `v2a`: we hold nothing that
+  could forge their events); for calls, a `token` to their API and an `hmac` secret they sign
+  their results with. Origin: **ours** (we generated it and handed it over) or **theirs** (they
+  generated it and gave it to us). Each has a validity window, so a new one and the old one both
+  work while they rotate.
 - **Event**: one fact the outside system tells us (`payment.succeeded`, `booking.cancelled`),
   with an id of its own, a type, a time and data. Events arrive at least once and in any order.
 - **Reference (ref)**: an unguessable token the app hands out (in a link, a message) so that a
@@ -170,15 +181,35 @@ suggests under 20 KB): an event says what happened and the reference, not a whol
 | `generate_secret(conn, t, keyring, name, by=)` | A shared secret of **ours**, returned to hand over |
 | `add_secret(conn, t, keyring, name, secret, by=)` | A shared secret of **theirs** |
 | `add_public_key(conn, t, keyring, name, "whpk_...", endpoint_id=, by=)` | Their public key (`v2a`); needs the endpoint id they gave our endpoint |
+| `add_credential(conn, t, keyring, name, kind, value, origin="theirs", by=, valid_until=)` | Any kind; for calls, a `token` for their API or the `hmac` secret they sign with (1 to 4096 characters, nothing blank around it; `whsec`/`whpk` checked as above) |
+| `value(conn, t, keyring, name, kind)` | The newest live one of a kind, opened (the token to send, the hmac secret to check with); None if none, or the connection is unknown or off |
 | `rotate(conn, t, keyring, name, overlap=7 days, by=)` | A new secret of ours; the live ones end after `overlap` |
 | `retire(conn, t, credential_id, after=)` | End one now or later |
-| `credentials(conn, t, keyring, name)` | What it may prove itself with now (what `Bridge` uses) |
+| `credentials(conn, t, keyring, name)` | What its requests may prove themselves with now (what `Bridge` uses): live `whsec` and `whpk` only, never a `token` or an `hmac` |
 | `listing(conn, t, name)` / `reveal(conn, t, keyring, id)` | Without values (kind, origin, fingerprint, validity) / one value, for whoever may see it (audit it) |
 | `reseal(conn, t, keyring)` | Seal again with the keyring's current key |
 
 Tables: `meydan_connections` (name, status, endpoint_id, note) and
-`meydan_connection_credentials` (connection, kind `whsec`/`whpk`, origin `ours`/`theirs`, sealed,
-fingerprint, valid_from, valid_until, created_by).
+`meydan_connection_credentials` (connection, kind `whsec`/`whpk`/`token`/`hmac`, origin
+`ours`/`theirs`, sealed, fingerprint, valid_from, valid_until, created_by).
+
+Calling them is the app's own code for now (its HTTP client), with what `value` gives:
+
+```python
+with engine.connect() as conn:
+    token = connections.value(conn, tables, keyring, "acme", "token")
+    signing = connections.value(conn, tables, keyring, "acme", "hmac")
+if token is None:
+    raise RuntimeError("acme: no live token (none given, retired, or the connection is off)")
+answer = httpx.get(
+    "https://api.acme.example/v1/orders/42", headers={"Authorization": f"Bearer {token}"}
+)
+# check `answer`'s signature with `signing` the way their documentation says
+```
+
+A new token: add it (`add_credential`; the newest live one is used at once), then `retire` the
+old one, now or after a while. Switching the connection off stops both ways: its requests get
+404 and `value` gives nothing.
 
 ### Managing them over HTTP (available since 0.42, extras `api`, `bridge`)
 
@@ -187,7 +218,7 @@ connection's own page, or the team's, needs. The app decides everything:
 
 - `may(principal, connection, action)`: `read` (see it, its credentials without values, its
   events and refused requests) or `manage` (create, accept, rotate, retire credentials; add a
-  public key; retry an event; switch it on/off). Nothing is allowed by default, admins included;
+  public key, a token or an hmac secret of theirs; retry an event; switch it on/off). Nothing is allowed by default, admins included;
   reading does not imply managing. May be async (an OpenFGA check). Unknown or not allowed: 404,
   so names stay private.
 - `audit(conn, principal, action, connection)`: called in the change's own transaction.
@@ -199,7 +230,7 @@ connection's own page, or the team's, needs. The app decides everything:
 |---|---|
 | `GET ""`, `GET /{name}` | the connections this person may read; one |
 | `GET /{name}/events`, `GET /{name}/rejections` | its latest events (with payload and outcome); its latest **refused** requests and why (bad signature, old timestamp, no type; no bodies kept, 30 days) |
-| `POST /{name}/secrets` | `{}`: a secret of ours, returned once; `{"secret": "whsec_..."}`: theirs |
+| `POST /{name}/secrets` | `{}`: a secret of ours, returned once; `{"secret": "whsec_..."}`: theirs; `{"kind": "token" \| "hmac", "secret": "..."}`: their token or hmac secret (never generated here; not returned; audited `token:theirs` / `hmac:theirs`) |
 | `POST /{name}/public-keys`, `POST /{name}/rotate` | their `whpk_` key (+ endpoint id); a new secret of ours, old ones end after `overlap_days` |
 | `POST /{name}/credentials/{id}/retire`, `.../reveal` | end one (now or later); show one again (only with `reveal=True`) |
 | `POST /{name}/events/{id}/retry`, `POST /{name}/status` | put a dead/ignored event back; on/off |
@@ -220,14 +251,16 @@ the old one. Keep it with the app's other secrets, not in the database it protec
 
 1. Incoming events: verify, store once, hand to the app's handler, retry, dead letter. **Done.**
 2. Expectations completed by an event (the reference). **Done** (`expect.complete`).
-3. Connections with sealed credentials, ours or theirs, `v2a`. **Done** (0.41).
+3. Connections with sealed credentials, ours or theirs, `v2a`. **Done** (0.41); credentials for
+   calling them (`token`, `hmac`), 0.43.
 4. Outside identities claimed with proof.
 5. Outcome ledger v0.
 
 ## Not here (yet)
 
-- Outgoing events and calls to outside systems (an outbox for them): with the second bridge
-  that needs them (a booking tool, through `meydan.booking`'s adapter).
+- Outgoing events and calls to outside systems (an outbox for them: retries, a record of each
+  call): with the second bridge that needs them (a booking tool, through `meydan.booking`'s
+  adapter). Until then a call is the app's code, with the connection's `token` (0.43).
 - Typed events: a model per event type, checked on arrival, its schema published as docs.
 - Self-service connecting across apps: the hosting platform's work.
 - A protocol for agents of other instances: later, and not necessarily an existing one.

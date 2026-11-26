@@ -6,6 +6,47 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.43.0] - 2026-11-26
+### Added
+- Connections also hold what we need to call them (`meydan.bridge.connections`): credential
+  kinds `token` (what we present to their API: a bearer token, an API key) and `hmac` (a secret
+  they sign their results with; the algorithm and what is signed are the app's), usually
+  **theirs**. `add_credential(conn, t, keyring, name, kind, value, *, origin="theirs", by=None,
+  valid_until=None)` keeps one of any kind (1 to `VALUE_MAX` = 4096 characters, nothing blank
+  around it; `whsec` and `whpk` checked as before). `value(conn, t, keyring, name, kind)` opens
+  the newest live one; None if there is none or the connection is unknown or off (off stops
+  both ways). `listing`, `reveal`, `retire` and `reseal` treat them like any credential.
+  `meydan.runtime.tables.INBOUND_CREDENTIAL_KINDS` / `OUTBOUND_CREDENTIAL_KINDS`.
+- `meydan.bridge.manage`: `POST /{name}/secrets` takes `{"kind": "token" | "hmac", "secret":
+  "..."}`, theirs (never generated, not returned; `manage` as before; audited `token:theirs` /
+  `hmac:theirs`). Listing shows them with a fingerprint; reveal is the same opt-in (`reveal=True`,
+  audited).
+### Fixed
+- `connections.credentials` (what `Bridge` verifies requests with) reads only `whsec` and
+  `whpk`; before, any other kind would have been taken as a public key. A `token` or an `hmac`
+  never verifies a request to us (no earlier release could store one).
+### Changed
+- `POST /{name}/secrets`: `secret` may be up to 4096 characters (was 200); a `whsec` is still
+  24 to 64 bytes.
+### Upgrading
+- The CHECK constraint on `meydan_connection_credentials.kind` (your prefix) gains `token` and
+  `hmac`. Autogenerate does not see check constraints: replace it by hand in a migration.
+  Allowed values: `'whsec', 'whpk', 'token', 'hmac'`. Its name: `kind` with a plain
+  `MetaData()`; with the usual naming convention (`"ck": "ck_%(table_name)s_%(constraint_name)s"`)
+  `ck_meydan_connection_credentials_kind` (check with `\d meydan_connection_credentials`):
+
+  ```sql
+  ALTER TABLE meydan_connection_credentials DROP CONSTRAINT ck_meydan_connection_credentials_kind;
+  ALTER TABLE meydan_connection_credentials ADD CONSTRAINT ck_meydan_connection_credentials_kind
+    CHECK (kind IN ('whsec', 'whpk', 'token', 'hmac'));
+  ```
+
+  (With Alembic ops: `op.drop_constraint(op.f(NAME), TABLE, type_="check")` and
+  `op.create_check_constraint(op.f(NAME), TABLE, "kind IN (...)")`; `op.f` keeps a naming
+  convention from renaming it again.) It only widens, so the previous release runs on it
+  (expand). Existing rows pass, so `ADD ... NOT VALID` then `VALIDATE CONSTRAINT` works where a
+  linter asks for it. A downgrade must delete `token`/`hmac` rows first.
+
 ## [0.42.0] - 2026-11-25
 ### Added
 - `meydan.bridge.manage.routes(bridge, auth, may=, audit=, names=, reveal=False)`: managing

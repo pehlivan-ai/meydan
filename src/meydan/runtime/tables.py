@@ -60,8 +60,14 @@ COST_SOURCES = ("provider", "estimate", "mixed")
 # dead: a handler refused it for good, or it failed too often (docs/bridges.md).
 BRIDGE_EVENT_STATUSES = ("pending", "done", "ignored", "dead")
 CONNECTION_STATUSES = ("on", "off")
-# whsec: a shared secret (Standard Webhooks v1); whpk: their public key (v2a, ed25519).
-CREDENTIAL_KINDS = ("whsec", "whpk")
+# How they prove their requests to us: whsec, a shared secret (Standard Webhooks v1); whpk, their
+# public key (v2a, ed25519). Only these verify a request (bridge.connections.credentials).
+INBOUND_CREDENTIAL_KINDS = ("whsec", "whpk")
+# For calling them and checking what they sign their own way: token, what we present to their API
+# (a bearer token, an API key); hmac, a secret they sign their results with (algorithm and format
+# are the app's). Never used to verify a request to us.
+OUTBOUND_CREDENTIAL_KINDS = ("token", "hmac")
+CREDENTIAL_KINDS = INBOUND_CREDENTIAL_KINDS + OUTBOUND_CREDENTIAL_KINDS
 # ours: we generated it and handed it over; theirs: they generated it and gave it to us.
 CREDENTIAL_ORIGINS = ("ours", "theirs")
 

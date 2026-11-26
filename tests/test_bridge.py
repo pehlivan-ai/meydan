@@ -416,6 +416,104 @@ def test_a_public_key_needs_an_endpoint_id_and_reseal_moves_to_the_new_key(db):
         assert cx.credentials(c, t, only_new, "acme").secrets == (secret,)
 
 
+def test_a_token_or_an_hmac_secret_never_verifies_a_request(db):
+    from meydan.bridge import connections as cx
+
+    engine, t = db
+    kr = keyring()
+    shaped_like_a_secret = bridge.new_secret()  # an hmac secret may look just like a whsec_
+    with engine.begin() as c:
+        cx.ensure(c, t, "acme")
+        cx.add_secret(c, t, kr, "acme", SECRET)
+        cx.add_credential(c, t, kr, "acme", "token", "tok_live_1")
+        cx.add_credential(c, t, kr, "acme", "hmac", shaped_like_a_secret)
+        cx.ensure(c, t, "zeta")  # calls only: nothing to check its requests with
+        cx.add_credential(c, t, kr, "zeta", "token", "tok_zeta")
+        cx.add_credential(c, t, kr, "zeta", "hmac", OTHER)
+        creds = cx.credentials(c, t, kr, "acme")
+        assert (creds.secrets, creds.public_keys) == ((SECRET,), ())
+        assert not cx.credentials(c, t, kr, "zeta")
+    br = make(db, {("acme", "payment.succeeded"): lambda c, e: None}, secrets={}, keyring=kr)
+    b = body()
+    with engine.begin() as c:
+        with pytest.raises(RejectedError) as signed_with_hmac:
+            br.receive(c, "acme", headers(shaped_like_a_secret, b), b)
+        with pytest.raises(RejectedError) as calls_only:
+            br.receive(c, "zeta", headers(OTHER, b), b)
+        assert not br.receive(c, "acme", headers(SECRET, b), b).duplicate
+    assert (signed_with_hmac.value.status, calls_only.value.status) == (401, 404)
+
+
+def test_a_token_for_their_api_the_newest_live_one_wins(db):
+    from datetime import UTC, datetime
+
+    from meydan.bridge import connections as cx
+
+    engine, t = db
+    kr = keyring()
+    with engine.begin() as c:
+        cx.ensure(c, t, "acme")
+        assert cx.value(c, t, kr, "acme", "token") is None
+        first = cx.add_credential(c, t, kr, "acme", "token", "tok_1", by="tester")
+        cx.add_credential(c, t, kr, "acme", "hmac", "their-signing-secret")
+        assert cx.value(c, t, kr, "acme", "token") == "tok_1"
+        second = cx.add_credential(c, t, kr, "acme", "token", "tok_2")
+        assert cx.value(c, t, kr, "acme", "token") == "tok_2"  # the new one, at once
+        assert cx.value(c, t, kr, "acme", "hmac") == "their-signing-secret"
+        cx.retire(c, t, second)
+        assert cx.value(c, t, kr, "acme", "token") == "tok_1"  # back to the one still live
+        cx.retire(c, t, first)
+        assert cx.value(c, t, kr, "acme", "token") is None
+        cx.add_credential(
+            c, t, kr, "acme", "token", "tok_3", valid_until=datetime(2020, 1, 1, tzinfo=UTC)
+        )
+        assert cx.value(c, t, kr, "acme", "token") is None  # already over: not live
+        cx.add_credential(c, t, kr, "acme", "token", "tok_4")
+        cx.set_status(c, t, "acme", on=False)
+        assert cx.value(c, t, kr, "acme", "token") is None  # off: nothing to call them with
+        cx.set_status(c, t, "acme", on=True)
+        assert cx.value(c, t, kr, "acme", "token") == "tok_4"
+        assert cx.value(c, t, kr, "nobody", "token") is None
+        info = cx.listing(c, t, "acme")
+        sealed = c.execute(select(t.connection_credentials.c.sealed)).scalars().all()
+        token = next(i for i in info if i.id == first)
+    assert [i.kind for i in info].count("token") == 4 and "hmac" in {i.kind for i in info}
+    assert (token.origin, token.fingerprint, token.live) == ("theirs", cx.fingerprint("tok_1"),
+                                                             False)  # fmt: skip
+    assert all("tok_" not in x and "their-signing" not in x for x in sealed)  # never in the clear
+    with engine.connect() as c:
+        assert cx.reveal(c, t, kr, first) == "tok_1"
+
+
+@pytest.mark.parametrize(
+    "kind, value, kw",
+    [
+        ("apikey", "tok", {}),  # not a kind
+        ("token", "", {}),
+        ("token", "tok\n", {}),  # a pasted line break
+        ("token", "x" * 4097, {}),
+        ("token", "tok", {"origin": "mine"}),
+        ("hmac", "s", {"valid_until": "naive"}),
+        ("whsec", "not-base64!", {}),  # a shared secret is still checked as one
+        ("whpk", "whpk_x", {}),
+    ],
+)
+def test_adding_a_credential_refuses(db, kind, value, kw):
+    from datetime import datetime
+
+    from meydan.bridge import connections as cx
+
+    engine, t = db
+    if kw.get("valid_until") == "naive":
+        kw = {"valid_until": datetime(2030, 1, 1)}
+    with engine.begin() as c:
+        cx.ensure(c, t, "acme")
+        with pytest.raises(ValueError):
+            cx.add_credential(c, t, keyring(), "acme", kind, value, **kw)
+        with pytest.raises(ValueError):
+            cx.value(c, t, keyring(), "acme", "apikey")
+
+
 def test_the_command_line_sends_like_the_other_side_would(db, monkeypatch, capsys):
     import httpx
 
@@ -507,6 +605,55 @@ def test_managing_a_connection_is_what_the_app_allows(db):
     off = client.post("/connections/acme/status", json={"on": False}, headers=as_(admin)).json()
     assert off["status"] == "off"
     assert done == [("secret:ours", "acme"), ("reveal", "acme"), ("off", "acme")]
+
+
+def test_their_token_and_hmac_secret_over_http(db):
+    from meydan.auth import AuthConfig, issue_service_key
+    from meydan.auth.web import Auth
+    from meydan.bridge import connections as cx
+    from meydan.bridge.manage import routes as manage_routes
+
+    engine, t = db
+    kr = keyring()
+    with engine.begin() as c:
+        cx.ensure(c, t, "acme")
+        _, viewer = issue_service_key(c, t, "viewer", set(), audience="dev")
+        _, admin = issue_service_key(c, t, "admin", set(), audience="dev")
+        names = dict(c.execute(select(t.actors.c.name, t.actors.c.id)).all())
+    rules = {(names["viewer"], "read"), (names["admin"], "read"), (names["admin"], "manage")}
+    done = []
+    br = make(db, secrets={}, keyring=kr)
+    auth = Auth(engine, t, AuthConfig(audience="dev"), secure_cookies=False)
+    app = FastAPI()
+    app.include_router(manage_routes(
+        br, auth, may=lambda p, n, a: (p.actor_id, a) in rules,
+        audit=lambda conn, p, action, n: done.append(action), reveal=True,
+    ), prefix="/connections")  # fmt: skip
+    client = TestClient(app)
+    as_ = lambda key: {"Authorization": f"Bearer {key}"}  # noqa: E731 (a short alias)
+    long_token = "tok_" + "x" * 1000  # longer than any shared secret
+
+    post = lambda body, key=admin: client.post(  # noqa: E731 (a short alias)
+        "/connections/acme/secrets", json=body, headers=as_(key)
+    )
+    assert post({"kind": "token", "secret": long_token}, viewer).status_code == 404
+    assert post({"kind": "hmac"}).status_code == 422  # theirs to give: never generated here
+    assert post({"kind": "apikey", "secret": "x"}).status_code == 422
+    made = post({"kind": "token", "secret": long_token}).json()
+    assert made == {"fingerprint": cx.fingerprint(long_token), "secret": None}  # not echoed
+    assert post({"kind": "hmac", "secret": "their-signing-secret"}).status_code == 200
+    view = client.get("/connections/acme", headers=as_(viewer)).json()
+    assert "tok_" not in str(view) and "their-signing" not in str(view)
+    assert {(x["kind"], x["origin"]) for x in view["credentials"]} == {
+        ("token", "theirs"), ("hmac", "theirs")
+    }  # fmt: skip
+    token_id = next(x["id"] for x in view["credentials"] if x["kind"] == "token")
+    shown = client.post(f"/connections/acme/credentials/{token_id}/reveal", headers=as_(admin))
+    assert shown.json()["secret"] == long_token
+    assert done == ["token:theirs", "hmac:theirs", "reveal"]
+    with engine.connect() as c:
+        assert cx.value(c, t, kr, "acme", "token") == long_token
+        assert not cx.credentials(c, t, kr, "acme")  # still nothing to check their requests with
 
 
 def make_app_for(br) -> TestClient:
