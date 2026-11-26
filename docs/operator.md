@@ -16,7 +16,7 @@ app.include_router(operator_routes(auth, runtime, labels=my_labels), prefix="/op
 | `GET /operator/conversations` | observe's list, plus this reader's `unread`, any `taken_over`/`taken_by`/`taken_until`, and the app's `labels` |
 | `GET /operator/conversations/{id}` | one conversation's row (who, unread, takeover) |
 | `GET /operator/summary` | counts only (`taken_over`), nothing read or audited |
-| `POST /operator/conversations/{id}/read` | this reader has seen everything so far |
+| `POST /operator/conversations/{id}/read` | this reader has seen everything so far; the person writing sees "seen" for what was unread (`conversation.read`, the only "seen" during a takeover) |
 | `POST /operator/conversations/{id}/takeover {minutes?}` | take it over: the agent does not answer until it ends or is handed back |
 | `POST /operator/conversations/{id}/handback` | hand it back to the agent |
 | `POST /operator/conversations/{id}/messages {text, name?}` | write as yourself (`author="staff"`); takes it over for 30 minutes |

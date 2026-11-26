@@ -5,8 +5,10 @@ transaction), a photo once it is downloaded and kept (`Ingest`, after the webhoo
 then is it *seen* (`Seen`: the channel's read receipt, `Presence.read_after_s` after it arrived)
 and only then does it join a turn (the worker waits up to `RuntimeConfig.ingest_wait_s`).
 
-    message.received  ──Ingest──►  inbox.media, inbox.ingested_at  ──►  message.ingested
-    message.ingested  ──Seen────►  channel.mark_read, inbox.read_at
+    message.received   ──Ingest─────►  inbox.media, inbox.ingested_at  ──►  message.ingested
+    message.ingested   ──Seen───────►  channel.mark_read, inbox.read_at  (not while taken over)
+    conversation.read  ──StaffSeen──►  channel.mark_read for what is still unread (a person on the
+                                       team opened it: the "seen" of a conversation taken over)
 
 Neither ever waits on a row a turn holds (the turn's transaction is open while the model thinks):
 they skip a locked row and leave it to the turn, which marks read itself.
@@ -83,6 +85,14 @@ def _inbound(r: dict[str, Any]) -> Inbound:
     )  # fmt: skip
 
 
+def _taken_over(rt: "Runtime", conversation_id: uuid.UUID) -> bool:
+    """A person on the team has the conversation (meydan.operator): the agent is quiet there."""
+    from meydan.runtime.worker import taken_over_now  # noqa: PLC0415
+
+    with rt.engine.connect() as conn:
+        return bool(conn.scalar(select(taken_over_now(rt.t, conversation_id))))
+
+
 def _set_free(rt: "Runtime", conn: Connection, inbox_id: uuid.UUID, **values: Any) -> bool:
     """Update the inbox row unless a turn holds it (SKIP LOCKED): never wait on a turn."""
     i = rt.t.inbox
@@ -144,6 +154,8 @@ def seen(rt: "Runtime") -> Subscriber:
             raise PermanentError("no such message")
         if r["read_at"] is not None or r["processed_at"] is not None:
             return None  # answered (typing marked it read) or seen already
+        if await asyncio.to_thread(_taken_over, rt, r["conversation_id"]):
+            return None  # a person has it: "seen" when one of them opens it (StaffSeen)
         await rt.channel.mark_read(r["to"], r["message_id"])
         await asyncio.to_thread(stamp, r["id"])
         return None
@@ -154,11 +166,48 @@ def seen(rt: "Runtime") -> Subscriber:
     )  # fmt: skip
 
 
+def staff_seen(rt: "Runtime") -> Subscriber:
+    """A person on the team opened the conversation: what is still unread is marked seen on the
+    channel, each message (WhatsApp would cover earlier ones, but an album's share a second)."""
+
+    def unread(conversation_id: uuid.UUID) -> list[dict[str, Any]]:
+        i = rt.t.inbox
+        with rt.engine.connect() as conn:
+            rows = conn.execute(
+                select(i.c.id, i.c.to, i.c.message_id)
+                .where(
+                    i.c.conversation_id == conversation_id,
+                    i.c.read_at.is_(None),
+                    i.c.ingested_at.is_not(None),  # only what is in the system
+                    *([i.c.channel == rt.serves] if rt.serves else []),
+                )
+                .order_by(i.c.sent_at, i.c.id)
+            ).mappings()
+            return [dict(r) for r in rows]
+
+    def stamp(inbox_id: uuid.UUID) -> None:
+        with rt.engine.begin() as conn:
+            _set_free(rt, conn, inbox_id, read_at=func.clock_timestamp())
+
+    async def handle(event: Event) -> Later | None:
+        if event.subject_id is None:
+            raise PermanentError("no conversation")
+        for r in await asyncio.to_thread(unread, event.subject_id):
+            await rt.channel.mark_read(r["to"], r["message_id"])
+            await asyncio.to_thread(stamp, r["id"])
+        return None
+
+    return Subscriber(
+        f"meydan.staff-seen:{rt.serves or 'any'}", ("conversation.read",), handle,
+        channel=rt.serves, max_attempts=5, lease_s=30,
+    )  # fmt: skip
+
+
 def builtin(rt: "Runtime") -> list[Subscriber]:
     """The runtime's own subscribers, as its config and channel allow."""
     subs = []
     if rt.cfg.fetch_media and getattr(rt.channel, "download_media", None) is not None:
         subs.append(ingest(rt))
     if rt.presence.read_after_s is not None and getattr(rt.channel, "mark_read", None) is not None:
-        subs.append(seen(rt))
+        subs += [seen(rt), staff_seen(rt)]
     return subs

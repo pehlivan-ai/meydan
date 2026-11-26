@@ -129,3 +129,26 @@ async def test_bubbles_stay_paced_after_a_slow_turn(db):
     await asyncio.sleep(1.1)
     await rt.send_once()
     assert len(ch.sent) == 2
+
+
+async def test_while_the_team_has_it_seen_waits_for_someone_on_the_team_to_open_it(db):
+    from meydan import operator
+
+    ch = FakeChannel()
+    rt = runtime(db, reply, ch, debounce_s=60, max_wait_s=120)  # "instant": seen at once
+    receive(rt, [msg("w1", "selam", T0)])
+    await rt.events_once()  # the agent has it: seen at once
+    with rt.engine.begin() as c:
+        conversation = c.scalar(select(rt.t.conversations.c.id))
+        operator.takeover(c, rt.t, conversation, "staff-1")
+    receive(rt, [msg("w2", "orada mısınız?", T0 + timedelta(seconds=5))])
+    await rt.events_once()
+    assert ch.events == [("read", "w1")]  # w1 came before the takeover; w2 waits for a person
+    with rt.engine.begin() as c:
+        operator.mark_read(c, rt.t, conversation, "staff-1")  # someone on the team opened it
+    await rt.events_once()
+    assert ch.events == [("read", "w1"), ("read", "w2")]
+    with rt.engine.begin() as c:
+        operator.mark_read(c, rt.t, conversation, "staff-1")  # opened again: nothing new
+    await rt.events_once()
+    assert len(ch.events) == 2

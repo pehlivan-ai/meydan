@@ -6,6 +6,21 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.48.0] - 2026-11-26
+### Added
+- Fact `conversation.read` (`meydan.operator.STAFF_READ`): `operator.mark_read` emits it, with the
+  reader. Subscriber `StaffSeen` (meydan.runtime.ingest) marks what is still unread in that
+  conversation "seen" on the channel, each message.
+
+### Changed
+- While a conversation is taken over, `Seen` no longer marks its messages read: the person writing
+  sees "seen" when someone on the team opens the conversation (`operator.mark_read`, e.g. the
+  operator route `POST /conversations/{id}/read`), not before nobody has read it.
+
+### Upgrading
+- No table changes. Mark a conversation read when a person on the team opens it (the operator read
+  route, or `operator.mark_read`) so its writer sees "seen" during a takeover.
+
 ## [0.47.0] - 2026-11-26
 ### Added
 - `meydan.events` (docs/events.md): facts and their subscribers. `emit(conn, tables, kind, key=,

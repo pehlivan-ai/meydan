@@ -44,6 +44,9 @@ class NotFoundError(Exception):
     """No such conversation, or no message from them to answer."""
 
 
+STAFF_READ = "conversation.read"  # a person on the team read it (meydan.events)
+
+
 @dataclass(frozen=True)
 class Takeover:
     taken_by: str
@@ -57,7 +60,13 @@ class Takeover:
 def mark_read(
     conn: Connection, t: RuntimeTables, conversation_id: uuid.UUID, reader: str
 ) -> datetime:
-    """This reader has seen everything that came in so far. Returns the mark (never moves back)."""
+    """This reader has seen everything that came in so far. Returns the mark (never moves back).
+
+    Also a fact, `conversation.read` (meydan.events): a person on the team has the conversation in
+    front of them, so the runtime marks what they now saw "seen" on the channel. While a
+    conversation is taken over that is the only "seen" its writer gets (meydan.runtime.ingest)."""
+    from meydan.events import emit  # noqa: PLC0415
+
     r = t.operator_reads
     now = conn.scalar(select(func.now()))
     stmt = insert(r).values(conversation_id=conversation_id, reader=reader[:200], seen_until=now)
@@ -67,6 +76,9 @@ def mark_read(
             set_={"seen_until": func.greatest(r.c.seen_until, stmt.excluded.seen_until)},
         )
     )
+    cv = t.conversations
+    channel = conn.scalar(select(cv.c.channel).where(cv.c.id == conversation_id))
+    emit(conn, t, STAFF_READ, subject_id=conversation_id, channel=channel, data={"reader": reader})
     return now
 
 

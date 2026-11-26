@@ -69,7 +69,10 @@ facts are pruned hourly, in batches.
 ```
 receive ─► inbox row ─┬─ text: ingested now ──────────────────────────► message.ingested
                       └─ a photo: message.received ─► Ingest (download, keep) ─► message.ingested
-message.ingested ─► Seen: read_after_s after arrival, the channel's read receipt (each message)
+message.ingested ─► Seen: read_after_s after arrival, the channel's read receipt (each message);
+                   not while a person has the conversation (meydan.operator takeover)
+conversation.read ─► StaffSeen: someone on the team opened it (operator.mark_read): what is still
+                   unread is marked seen. A fact emitted by the ops process, handled by the app's
 worker: a turn waits for its messages to be ingested (at most ingest_wait_s, then goes without)
 ```
 
