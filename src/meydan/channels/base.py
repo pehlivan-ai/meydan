@@ -59,9 +59,14 @@ class Inbound:
     # The channel's id of the message of ours this one answers (WhatsApp: a button press or a
     # quoted reply carries `context.id`, the wamid we sent). Links replies to what they answer.
     reply_to: str | None = None
+    # What they sent as a file (a photo), once the runtime has kept it: its key in meydan.media.
+    # Channels never set it; the worker does, before the turn (RuntimeConfig.fetch_media).
+    media: str | None = None
 
 
 REACTION = "reaction"  # an Inbound's kind when it is an emoji on a message (`reply_to`)
+# The most meydan downloads of one file someone sent (a channel's own limit may be lower).
+RECEIVED_MAX_BYTES = 20 * 1024 * 1024
 # Kinds whose `text` is only a caption: what was sent is named in front of it when read back.
 MEDIA_KINDS = frozenset({"image", "video", "audio", "voice", "document", "sticker"})
 

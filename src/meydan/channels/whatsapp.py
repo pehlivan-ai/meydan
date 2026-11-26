@@ -13,6 +13,7 @@ from typing import Any, Literal
 import httpx
 
 from meydan.channels.base import (
+    RECEIVED_MAX_BYTES,
     Address,
     EndpointUpdate,
     Inbound,
@@ -447,6 +448,32 @@ class WhatsAppCloud:
         reason = f"upload {r.status_code} {code}: {err.get('message', r.text[:200])}"
         retry = code in RETRYABLE_CODES or r.status_code == 429 or r.status_code >= 500
         raise SendError(reason, retryable=retry, code=code)
+
+    async def download_media(self, message: Inbound) -> tuple[bytes, str] | None:
+        """The file someone sent in `message` (a photo): its bytes and media type; None when it
+        carries none. Cloud API "Media": GET the media id for a URL (valid 5 minutes; ids from
+        webhooks live 7 days), then GET that URL with the token. SendError when WhatsApp refuses
+        (retryable for network and server errors)."""
+        media_id = ((message.payload or {}).get(message.kind) or {}).get("id")
+        if not media_id:
+            return None
+        auth = {"Authorization": f"Bearer {self._token}"}
+        try:
+            meta = await self._client.get(f"{GRAPH}/{self._version}/{media_id}", headers=auth)
+            if meta.status_code >= 300:
+                raise SendError(f"media: {meta.status_code}", retryable=meta.status_code >= 500)
+            info = meta.json()
+            if int(info.get("file_size") or 0) > RECEIVED_MAX_BYTES:
+                raise SendError("media: too large", retryable=False)
+            got = await self._client.get(info["url"], headers=auth)
+        except (httpx.TimeoutException, httpx.NetworkError) as e:
+            raise SendError(f"media: network: {type(e).__name__}", retryable=True) from e
+        if got.status_code >= 300:
+            raise SendError(f"media download: {got.status_code}", retryable=True)
+        if len(got.content) > RECEIVED_MAX_BYTES:
+            raise SendError("media: too large", retryable=False)
+        mime = (info.get("mime_type") or got.headers.get("content-type") or "").split(";")[0]
+        return got.content, mime.strip() or "application/octet-stream"
 
     async def list_templates(self, account: str) -> list[TemplateUpdate]:
         """Every template of a business account as it stands now (for a sync at startup).

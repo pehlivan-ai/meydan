@@ -3,6 +3,7 @@
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
+from datetime import timedelta
 from typing import TYPE_CHECKING, Any, Protocol
 
 from sqlalchemy import Connection, func
@@ -33,6 +34,11 @@ class Channel(Protocol):
 
     # Optional: mark read without typing. Channels without it get no separate read receipts.
     # async def mark_read(self, from_number: str, message_id: str) -> None: ...
+
+    # Optional: the file someone sent in a message (a photo): (bytes, media type), or None when it
+    # carries none. The worker keeps it before the turn (RuntimeConfig.fetch_media); channels
+    # without it keep only the text.
+    # async def download_media(self, message: Inbound) -> tuple[bytes, str] | None: ...
 
 
 @dataclass(frozen=True)
@@ -97,6 +103,14 @@ class RuntimeConfig:
     # A reaction (an emoji on a message) is recorded and read back in the transcript, but opens
     # no turn: nobody answers a 🙏. True: the agent gets a turn for it like any message.
     answer_reactions: bool = False
+    # What people send as files, kept before the turn (the channel's `download_media`, then
+    # meydan.media.receive) so an agent can see it and the team can open it. Kinds by the
+    # channel's name for them; empty: nothing is fetched.
+    fetch_media: frozenset[str] = frozenset({"image"})
+    image_max_edge: int = 1568  # a received photo's long edge once kept (meydan.media)
+    # How long received files are kept; None: until the app deletes them. Swept hourly.
+    keep_received: timedelta | None = None
+    media_sweep_s: float = 3600.0
 
 
 _STATUS_RANK = {"pending": 0, "sent": 1, "delivered": 2, "read": 3}

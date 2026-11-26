@@ -16,8 +16,13 @@ is rows (`meydan.runtime.transcript`). This module is the one place that knows P
   tool returns when the return type describes its fields. `undescribed_tool(fn)` and
   `assert_tool_described(*fns)` are for your tests: the tool, its parameters and what it returns,
   each with a word on it (as `meydan.reply.assert_described` is for a reply).
-- `history(lines)` turns a transcript into model messages: what the person said as requests,
-  what we sent as responses, consecutive lines of one side merged, starting with the person.
+- `history(lines, images)` turns a transcript into model messages: what the person said as
+  requests, what we sent as responses, consecutive lines of one side merged, starting with the
+  person. `images` (media key -> bytes and type) puts those photos back where they were sent.
+- Photos people send (`handler(..., images=True)`): the turn's photos go to the model with the
+  text, as bytes (private files: no URL a provider could fetch; portable across providers, unlike
+  a provider's file id). `history_images=N` puts the last N photos of the history back too; older
+  ones stay "[image] caption". Only for a model that reads images; off by default.
 - `handler(agent, ...)` is an agent as a turn handler: what every app wrote around its agent
   (three apps, three copies), with what was learned doing it built in:
 
@@ -39,13 +44,14 @@ Requires the `llm` extra (and `runtime`, for `handler`).
 import asyncio
 import functools
 import inspect
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import AbstractContextManager
 from datetime import datetime
 from typing import Any
 
 from pydantic_ai import RunContext, Tool
 from pydantic_ai.messages import (
+    BinaryContent,
     ModelMessage,
     ModelRequest,
     ModelResponse,
@@ -168,18 +174,26 @@ def _undescribed_properties(schema: dict[str, Any], *, require_all: bool) -> lis
     return missing
 
 
-def history(lines: Iterable[Said]) -> list[ModelMessage]:
-    """A transcript (oldest first, text only) as the messages a model is given before a turn."""
+def history(
+    lines: Iterable[Said], images: Mapping[str, tuple[bytes, str]] | None = None
+) -> list[ModelMessage]:
+    """A transcript (oldest first) as the messages a model is given before a turn. `images`: the
+    photos to put back where the person sent them (media key -> bytes, type); others are text."""
     messages: list[ModelMessage] = []
     for line in lines:
-        if not line.text:
+        image = (images or {}).get(line.media) if line.media else None
+        if not line.text and image is None:
             continue
         last = messages[-1] if messages else None
         if line.direction == "in":
+            bits: list[Any] = [BinaryContent(data=image[0], media_type=image[1])] if image else []
+            bits += [line.text] if line.text else []
             if isinstance(last, ModelRequest):
-                last.parts[0].content += "\n" + line.text  # type: ignore[union-attr,operator]
+                part = last.parts[0]
+                part.content = _joined(part.content, bits)  # type: ignore[union-attr]
             else:
-                messages.append(ModelRequest(parts=[UserPromptPart(content=line.text)]))
+                content = bits[0] if len(bits) == 1 and isinstance(bits[0], str) else bits
+                messages.append(ModelRequest(parts=[UserPromptPart(content=content)]))
         elif isinstance(last, ModelResponse):
             last.parts[0].content += "\n" + line.text  # type: ignore[union-attr]
         else:
@@ -187,6 +201,18 @@ def history(lines: Iterable[Said]) -> list[ModelMessage]:
     while messages and isinstance(messages[0], ModelResponse):
         messages.pop(0)  # a history starts with the person speaking
     return messages
+
+
+def _joined(content: Any, bits: list[Any]) -> Any:
+    """One side's consecutive lines in one message: text joined by newlines, photos kept as
+    parts (then the content is a list)."""
+    items = list(content) if isinstance(content, list) else [content]
+    for bit in bits:
+        if isinstance(bit, str) and items and isinstance(items[-1], str):
+            items[-1] += "\n" + bit
+        else:
+            items.append(bit)
+    return items[0] if len(items) == 1 and isinstance(items[0], str) else items
 
 
 # For the agent's instructions: what the block at the end of each message is.
@@ -225,8 +251,11 @@ class AgentHandler:
         history_lines: int = 30,
         timeout_s: float = 45,
         since: Callable[[Any], datetime | None] | None = None,
+        images: bool = False,
+        history_images: int = 0,
     ):
         self.agent = agent
+        self.images, self.history_images = images, history_images
         self.engine, self.tables = engine, tables
         self.deps, self.clock, self.now, self.said = deps, clock, now, said
         self._messages = messages
@@ -241,6 +270,35 @@ class AgentHandler:
             lines.extend(self.now(turn))
         text = self.said(turn) if self.said is not None else (said(turn) or NO_TEXT)
         return f"{text}\n\n(" + "\n".join(lines) + ")" if lines else text
+
+    def content(self, turn: Any) -> str | list[Any]:
+        """The prompt, with the turn's photos in front of it when the model sees images
+        (`images=True`): bytes from meydan.media, each labelled when there are several."""
+        text = self.prompt(turn)
+        keys = [m.media for m in turn.messages if getattr(m, "media", None)]
+        if not self.images or not keys or self.engine is None:
+            return text
+        found = self._load(keys)
+        parts: list[Any] = []
+        for n, key in enumerate(k for k in keys if k in found):
+            if len(found) > 1:
+                parts.append(f"Image {n + 1}:")
+            data, mime = found[key]
+            parts.append(BinaryContent(data=data, media_type=mime))
+        return [*parts, text] if parts else text
+
+    def _load(self, keys: Iterable[str]) -> dict[str, tuple[bytes, str]]:
+        """Photos by key, read from meydan.media; a file that is gone is left out."""
+        from meydan import media  # noqa: PLC0415
+
+        found: dict[str, tuple[bytes, str]] = {}
+        with self.engine.connect() as conn:
+            for key in dict.fromkeys(keys):
+                try:
+                    found[key] = media.load(conn, self.tables, key)
+                except media.MediaMissingError:
+                    continue
+        return found
 
     def messages(self, output: Any, turn: Any) -> list[Outbound]:
         """What a reply sends: its bubbles, or what the app makes of its output."""
@@ -257,10 +315,16 @@ class AgentHandler:
         with self.engine.connect() as conn:
             lines = transcript(conn, self.tables, turn.conversation_id, self.history_lines)
         start = self.since(turn) if self.since is not None else None
-        return history([line for line in lines if start is None or line.at > start])
+        lines = [line for line in lines if start is None or line.at > start]
+        keys = [x.media for x in lines if x.media and x.direction == "in"]
+        recent = keys[-self.history_images :] if self.images and self.history_images else []
+        return history(lines, self._load(recent) if recent else None)
 
     async def run(
-        self, turn: Any, history: Sequence[ModelMessage] = (), prompt: str | None = None
+        self,
+        turn: Any,
+        history: Sequence[ModelMessage] = (),
+        prompt: str | Sequence[Any] | None = None,
     ) -> Any:
         """One run of the agent for this turn, with a time limit; records its model calls."""
         from meydan import observe  # noqa: PLC0415
@@ -277,7 +341,7 @@ class AgentHandler:
         # `now`, `said` and `messages` are the app's and may read its database: they run off the
         # event loop, like the history, so one slow query never holds every other conversation.
         past = await asyncio.to_thread(self.history, turn)
-        prompt = await asyncio.to_thread(self.prompt, turn)
+        prompt = await asyncio.to_thread(self.content, turn)
         result = await self.run(turn, past, prompt)
         return await asyncio.to_thread(self.messages, result.output, turn)
 
@@ -290,6 +354,8 @@ def handler(agent: Any, **options: Any) -> AgentHandler:
     each message), `now(turn)` (more lines that are true only now, read on every turn),
     `said(turn)` (what the model reads of the person's messages; left out: their text, or a note
     that there was none), `messages(output, turn)` (what a reply sends; left out: its bubbles),
-    `history_lines`, `timeout_s`, `since(turn)` (no history before this moment). `now`, `said` and
+    `history_lines`, `timeout_s`, `since(turn)` (no history before this moment), `images` (the
+    turn's photos go to the model; only for a model that reads images) and `history_images` (the
+    last N photos of the history too). `now`, `said` and
     `messages` may read the app's database: they run off the event loop."""
     return AgentHandler(agent, **options)

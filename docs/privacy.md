@@ -14,6 +14,7 @@ them one by one.
 |---|---|---|
 | Our own messages, in later turns | `recall`: the line the model reads instead of the text | v0.39.0 |
 | What people write | `said(turn)` on the agent handler | v0.24.0 |
+| What people send as files | photos reach the model only with `handler(images=True)`, resized and without metadata; kept `keep_received` long ([media.md](media.md#files-people-send-us)) | v0.45.0 |
 | What tools return | `ToolReturn.metadata` (Pydantic AI) is never sent; field marks: planned | — |
 | What the app puts in front | the app's own `now` / `in_front` | — |
 

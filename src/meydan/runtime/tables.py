@@ -233,6 +233,9 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         Column("text", Text, nullable=False, server_default=""),
         Column("payload", JSONB(none_as_null=True)),
         Column("reply_to", String(255)),  # the channel_message_id of ours it answers, if any
+        # A photo they sent, once kept in meydan.media (the worker fetches it before the turn);
+        # cleared when the file is forgotten (`media.forget_received`).
+        Column("media", Text, ForeignKey(f"{prefix}media.key", ondelete="SET NULL")),
         Column("sent_at", DateTime(timezone=True), nullable=False),
         now_col("received_at"),
         # Presence timeline (database clock): when we showed "seen" and "typing…" for it.

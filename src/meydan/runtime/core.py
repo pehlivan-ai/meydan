@@ -224,9 +224,31 @@ class Runtime:
                 with contextlib.suppress(TimeoutError):
                     await asyncio.wait_for(stop.wait(), timeout=self.cfg.expect_sweep_s)
 
+        async def forget() -> None:  # received files past the app's retention, hourly
+            while self.cfg.keep_received is not None and not stop.is_set():
+                try:
+                    await asyncio.to_thread(self.forget_received_once)
+                except Exception:
+                    log.exception("received media sweep error")
+                with contextlib.suppress(TimeoutError):
+                    await asyncio.wait_for(stop.wait(), timeout=self.cfg.media_sweep_s)
+
         await asyncio.gather(
             loop(self.read_once, "reader"),
             loop(self.work_once, "worker"),
             loop(self.send_once, "sender"),
             sweep(),
+            forget(),
         )
+
+    def forget_received_once(self) -> int:
+        """Drop the received files older than `RuntimeConfig.keep_received` (meydan.media)."""
+        from meydan import media  # noqa: PLC0415
+
+        if self.cfg.keep_received is None:
+            return 0
+        with self.engine.begin() as conn:
+            n = media.forget_received(conn, self.t, self.cfg.keep_received, store=self.media_store)
+        if n:
+            log.info("forgot %d received files", n)
+        return n

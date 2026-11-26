@@ -19,6 +19,7 @@ class Said:
     identity_id: uuid.UUID | None  # who said it (in) / to whom (out)
     text: str
     turn_id: uuid.UUID | None = None  # outbound: messages of one reply share it
+    media: str | None = None  # inbound: the file they sent, kept in meydan.media (a photo)
 
 
 def transcript(
@@ -32,7 +33,15 @@ def transcript(
     not interleave with ours."""
     i, o = t.inbox, t.outbox
     ins = conn.execute(
-        select(i.c.received_at, i.c.id, i.c.sender_identity_id, i.c.text, i.c.kind, i.c.reply_to)
+        select(
+            i.c.received_at,
+            i.c.id,
+            i.c.sender_identity_id,
+            i.c.text,
+            i.c.kind,
+            i.c.reply_to,
+            i.c.media,
+        )  # fmt: skip
         .where(i.c.conversation_id == conversation_id, i.c.processed_at.is_not(None))
         .order_by(i.c.received_at.desc(), i.c.id.desc())
         .limit(limit)
@@ -45,8 +54,8 @@ def transcript(
     ).all()
     on = _reacted_to(conn, t, [r.reply_to for r in ins if r.kind == REACTION and r.reply_to])
     lines = [
-        (at, id_, Said(at, "in", who, describe(kind, text or "", on.get(reply_to))))
-        for at, id_, who, text, kind, reply_to in ins
+        (at, id_, Said(at, "in", who, describe(kind, text or "", on.get(reply_to)), media=media))
+        for at, id_, who, text, kind, reply_to, media in ins
     ]
     lines += [
         # What an agent reads of our own message: its `recall` if it has one, else its text. The

@@ -321,7 +321,7 @@ def _choice_style(message: dict, channel: str) -> str | None:
         return None
 
 
-def _theirs(kind: str, payload: dict | None) -> dict:
+def _theirs(kind: str, payload: dict | None, media: str | None = None) -> dict:
     """The parts of a message someone sent us, from the channel's payload."""
     out: dict = {"kind": kind, "tapped": kind in ("interactive", "button")}
     loc = (payload or {}).get("location") if kind == "location" else None
@@ -331,8 +331,9 @@ def _theirs(kind: str, payload: dict | None) -> dict:
             address=loc.get("address"),
         )  # fmt: skip
     if kind == "image":
-        out["image"] = ImagePart(media=None, caption=((payload or {}).get("image") or {}).get(
-            "caption"))  # fmt: skip
+        out["image"] = ImagePart(
+            media=media, caption=((payload or {}).get("image") or {}).get("caption")
+        )  # fmt: skip
     return out
 
 
@@ -395,7 +396,7 @@ def _with_last_messages(
     return out
 
 
-# --- a file we sent ---------------------------------------------------------------------------
+# --- a file in a conversation ---------------------------------------------------------------------
 
 
 def media(
@@ -407,19 +408,16 @@ def media(
     visibility: Visibility = NEED_TO_KNOW,
     store=None,
 ) -> tuple[bytes, str] | None:
-    """A file we sent (an image), for a screen that shows the conversation: its bytes and type.
-    Shown like the messages it went out in: to someone in one of those conversations, or to
-    someone who may read others' messages (audited). None when there is no such file or the
-    person may not see it."""
+    """A file in a conversation (an image we sent, or a photo someone sent us), for a screen
+    that shows it: its bytes and type. Shown like the messages it is in: to someone in one of
+    those conversations, or to someone who may read others' messages (audited). None when there
+    is no such file or the person may not see it."""
     from meydan import media as files
 
-    o = t.outbox
-    convs = {
-        r.conversation_id
-        for r in conn.execute(
-            select(o.c.conversation_id).where(o.c.message["media"].astext == key).distinct()
-        )
-    }
+    o, i = t.outbox, t.inbox
+    sent = select(o.c.conversation_id).where(o.c.message["media"].astext == key)
+    got = select(i.c.conversation_id).where(i.c.media == key)
+    convs = {r[0] for r in conn.execute(sent.union(got))}
     if not convs:
         return None
     own = {r.conversation_id for r in conn.execute(_own_conversations(t, who.actor_id))}
@@ -552,7 +550,14 @@ def conversation(
 
     ins = conn.execute(
         select(
-            i.c.id, i.c.received_at, i.c.text, i.c.processed_at, i.c.kind, i.c.payload, i.c.reply_to
+            i.c.id,
+            i.c.received_at,
+            i.c.text,
+            i.c.processed_at,
+            i.c.kind,
+            i.c.payload,
+            i.c.reply_to,
+            i.c.media,
         )  # fmt: skip
         .where(i.c.conversation_id == conversation_id)
         .order_by(i.c.received_at.desc())
@@ -579,7 +584,7 @@ def conversation(
     lines = [
         Line(id=f"in:{r.id}", at=r.received_at, direction="in", text=r.text, turn_id=None,
              author="person", reply_to=ours.get(r.reply_to) if r.reply_to else None,
-             **_theirs(r.kind, r.payload))
+             **_theirs(r.kind, r.payload, r.media))
         for r in ins
     ]  # fmt: skip
     words = _template_words(conn, t, head.channel, outs)

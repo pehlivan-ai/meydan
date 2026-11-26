@@ -6,6 +6,29 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.45.0] - 2026-11-26
+### Added
+- Photos people send (docs/media.md, "Files people send us"): channels download them
+  (`WhatsAppCloud.download_media`, `Telegram.download_media`; optional on the `Channel`
+  protocol), the worker keeps them before the turn (`RuntimeConfig.fetch_media`, default
+  `{"image"}`), `Inbound.media` / `Said.media` carry the key, and `meydan.observe` shows and serves
+  them like the message they came in.
+- `meydan.media.prepare_image` (upright, long edge `IMAGE_MAX_EDGE` = 1568 px, JPEG, metadata
+  dropped; extra `media`: Pillow), `receive`, `forget_received(conn, tables, older_than)`.
+- `RuntimeConfig.keep_received` (None: keep) with an hourly sweep (`media_sweep_s`,
+  `Runtime.forget_received_once`); `image_max_edge`.
+- `handler(..., images=True, history_images=N)`: the turn's photos go to the model as bytes
+  (labelled when several), the last N of the history too; `history(lines, images)`;
+  `AgentHandler.content(turn)`.
+- Extra `media` (Pillow).
+
+### Upgrading
+- Table change: `<prefix>inbox.media` (text, nullable, FK to `<prefix>media.key` ON DELETE SET
+  NULL). Add it with your migrations (an Alembic autogenerate picks it up).
+- Nothing reaches a model until the app sets `images=True`; set it only for a model that reads
+  images. Photos are fetched and kept by default (`fetch_media`); set `fetch_media=frozenset()` to
+  keep only text, and `keep_received` to your retention.
+
 ## [0.44.0] - 2026-11-26
 ### Added
 - Reactions (an emoji on a message): WhatsApp's `reaction` messages are parsed: `kind`

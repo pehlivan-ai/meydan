@@ -150,6 +150,38 @@ class Worker(_Part):
         ).mappings()
         return [dict(r) for r in rows]
 
+    async def _keep_media(self, conn: Connection, rows: list[dict[str, Any]]) -> None:
+        """Keep the files in these messages (photos) before the turn, so the agent and the team
+        can see them. A file that can't be fetched leaves the message as it is: the turn still
+        runs, the agent reads "[image]" (logged; no address or content in the log)."""
+        download = getattr(self.channel, "download_media", None)
+        if download is None or not self.cfg.fetch_media:
+            return
+        for r in rows:
+            if r["kind"] not in self.cfg.fetch_media or r.get("media"):
+                continue
+            try:
+                got = await download(_inbound(r))
+                if got is not None:
+                    r["media"] = await asyncio.to_thread(self._store_media, conn, r["id"], *got)
+            except Exception as e:  # noqa: BLE001 - the turn goes on without the file
+                log.warning("media of inbox %s not kept: %s", r["id"], e)
+
+    def _store_media(self, conn: Connection, inbox_id: uuid.UUID, data: bytes, mime: str) -> str:
+        """The file in its own transaction, committed now: the agent's handler reads it on
+        another connection while this turn's is still open. The inbox row points at it in the
+        turn's transaction (a turn put back leaves the file; the next try finds it by its hash)."""
+        from meydan import media  # noqa: PLC0415
+
+        with self.engine.begin() as own:
+            key = media.receive(
+                own, self.t, data, mime, store=self.rt.media_store,
+                max_edge=self.cfg.image_max_edge,
+            )  # fmt: skip
+        i = self.t.inbox
+        conn.execute(update(i).where(i.c.id == inbox_id).values(media=key))
+        return key
+
     async def _turn(self, key: uuid.UUID) -> int:
         conn = await asyncio.to_thread(self.engine.connect)
         try:
@@ -162,6 +194,7 @@ class Worker(_Part):
             if await asyncio.to_thread(_taken_over, conn, self.t, key):
                 trans.rollback()  # taken over meanwhile: left for after the handback
                 return 0
+            await self._keep_media(conn, rows)
             turn = _turn_from_rows(key, rows)
             last = rows[-1]["message_id"]
             started_at = await asyncio.to_thread(conn.scalar, select(_clock()))
@@ -333,22 +366,24 @@ class Worker(_Part):
             )
 
 
+def _inbound(r: dict[str, Any]) -> Inbound:
+    return Inbound(
+        channel=r["channel"],
+        message_id=r["message_id"],
+        to=Address(r["to_scheme"], r["to"], r["to_scope"]),
+        sender=Address(r["sender_scheme"], r["sender"], r["sender_scope"]),
+        sent_at=r["sent_at"],
+        kind=r["kind"],
+        text=r["text"],
+        payload=r["payload"] or {},
+        sender_name=r["sender_name"],
+        reply_to=r["reply_to"],
+        media=r.get("media"),
+    )
+
+
 def _turn_from_rows(key: uuid.UUID, rows: list[dict[str, Any]]) -> Turn:
-    msgs = [
-        Inbound(
-            channel=r["channel"],
-            message_id=r["message_id"],
-            to=Address(r["to_scheme"], r["to"], r["to_scope"]),
-            sender=Address(r["sender_scheme"], r["sender"], r["sender_scope"]),
-            sent_at=r["sent_at"],
-            kind=r["kind"],
-            text=r["text"],
-            payload=r["payload"] or {},
-            sender_name=r["sender_name"],
-            reply_to=r["reply_to"],
-        )
-        for r in rows
-    ]
+    msgs = [_inbound(r) for r in rows]
     last = rows[-1]  # answer the address that wrote last (it may have changed mid-burst)
     name = next((r["sender_name"] for r in reversed(rows) if r["sender_name"]), None)
     return Turn(

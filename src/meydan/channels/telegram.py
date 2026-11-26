@@ -38,7 +38,7 @@ from typing import Any, Literal
 
 import httpx
 
-from meydan.channels.base import Address, Inbound, Outbound, SendError
+from meydan.channels.base import RECEIVED_MAX_BYTES, Address, Inbound, Outbound, SendError
 from meydan.rules import TELEGRAM
 
 log = logging.getLogger(__name__)
@@ -152,6 +152,27 @@ class Telegram:
             code=r.status_code,
             min_wait_s=wait,
         )
+
+    async def download_media(self, message: Inbound) -> tuple[bytes, str] | None:
+        """The photo someone sent in `message`: the largest size Telegram keeps (`getFile`, then
+        the file URL, valid at least an hour). None when it carries none."""
+        sizes = (message.payload or {}).get("photo") or []
+        if message.kind != "image" or not sizes:
+            return None
+        bot = message.to.value
+        token = self._tokens.get(bot)
+        if token is None:
+            raise SendError(f"no token for bot {bot}", retryable=False)
+        found = await self.call(bot, "getFile", file_id=sizes[-1]["file_id"])
+        if int(found.get("file_size") or 0) > RECEIVED_MAX_BYTES:
+            raise SendError("getFile: too large", retryable=False)
+        try:
+            got = await self._client.get(f"{API}/file/bot{token}/{found['file_path']}")
+        except httpx.HTTPError as e:
+            raise SendError(f"file: {type(e).__name__}", retryable=True) from None  # token in URL
+        if got.status_code != 200 or len(got.content) > RECEIVED_MAX_BYTES:
+            raise SendError(f"file: {got.status_code}", retryable=got.status_code >= 500)
+        return got.content, "image/jpeg"  # Telegram re-encodes photos as JPEG
 
     async def send(self, from_number: str, to: str, message: Outbound) -> str:
         chat = int(to)
