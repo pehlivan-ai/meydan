@@ -20,7 +20,9 @@ event comes), on meydan's facts (meydan.events):
   sends nothing more.
 
 Each notice is its own subscriber (a reminder waiting days never holds back the pay card):
-`Runtime(..., subscribers=notices.subscribers())`.
+`Runtime(..., subscribers=notices.subscribers())`. The runtime takes its subscribers when it is
+built, and the notices need it to queue messages: build them with `runtime=None, dues=None`, pass
+their subscribers to the runtime, then `notices.bind(runtime, dues)`.
 """
 
 import logging
@@ -83,7 +85,7 @@ class Notices:
         self,
         engine: Engine,
         runtime,
-        dues: Dues,
+        dues: Dues | None,
         notices: Sequence[Notice],
         *,
         name: str = "pay.notices",
@@ -94,6 +96,11 @@ class Notices:
         self.engine, self.runtime, self.dues = engine, runtime, dues
         self.notices, self.name = list(notices), name
         self.wait_s, self.max_wait_s, self.now = wait_s, max_wait_s, now
+
+    def bind(self, runtime, dues: Dues) -> "Notices":
+        """The runtime and dues, once built (they may come after the subscribers)."""
+        self.runtime, self.dues = runtime, dues
+        return self
 
     def subscribers(self) -> list[Subscriber]:
         """One subscriber per notice, named `<name>.<notice>`: each waits on its own."""
@@ -108,6 +115,8 @@ class Notices:
         async def handle(event: Event) -> Later | None:
             if event.subject_id is None:
                 return None
+            if self.runtime is None or self.dues is None:
+                return Later(self.wait_s)  # not bound yet: the process is still starting
             with self.engine.begin() as conn:
                 due = self.dues.get(conn, event.subject_id)
                 return None if due is None else self._send(conn, due, notice, event)

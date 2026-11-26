@@ -175,3 +175,16 @@ async def test_someone_who_never_wrote_gets_nothing(w):
     w.open(actor)
     await ev.drain_once()
     assert w.sent() == []
+
+
+async def test_notices_bound_after_the_runtime_was_built(w):
+    actor = w.writes(datetime.now(UTC))
+    n = Notices(w.engine, None, None, [opened(w.card)], wait_s=0)
+    ev = Events(w.engine, w.t, n.subscribers())
+    ev.register()
+    w.open(actor)
+    await ev.drain_once()
+    assert w.sent() == []  # not bound yet: it waits
+    n.bind(w.rt, w.dues)
+    await ev.drain_once()
+    assert len(w.sent()) == 1

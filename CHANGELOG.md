@@ -6,6 +6,11 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.52.1] - 2026-11-27
+### Added
+- `Notices.bind(runtime, dues)`: notices built before the runtime (it takes its subscribers when
+  built) get it afterwards; until then a fact waits.
+
 ## [0.52.0] - 2026-11-27
 ### Added
 - `meydan.pay.notices` (experimental): a due's facts become messages to the person, once per
