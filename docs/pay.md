@@ -126,6 +126,13 @@ the person.
 
 ## Opening a due
 
+**Available since 0.51.0** (`meydan.pay.dues`): `Dues(tables, table, keyring, subjects)`;
+`open(conn, subject, actor)` -> `(Due, token)` or `NotPayable` (the live due and the same link
+when asked again, its deadline and amount brought up to what the app says); `link` (the same
+token to send again: kept sealed, looked up by its hash); `resolve(conn, token)` (open and in
+time, or paid until `readable_until`); `checkout_handler(checkouts_table)` for checkouts of
+subject `due:<id>`; `cancel`; `expire` (past the deadline). `meydan.runtime.expect.by_token`.
+
 `pay.open(conn, subject=, actor=, notice=True)` when the app's state says someone owes (a
 registration became "awaiting payment"). It asks the subject's handler (`payable`), records the
 due, and makes its link: an `expect` waitpoint of kind `pay` (token hashed, expiring at the

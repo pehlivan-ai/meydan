@@ -95,6 +95,14 @@ def get(conn: Connection, t: RuntimeTables, expectation_id: uuid.UUID) -> Expect
     return Expectation.of(row) if row else None
 
 
+def by_token(conn: Connection, t: RuntimeTables, token: str, *, kind: str) -> Expectation | None:
+    """The expectation of this kind a token was made for, in any state (the caller decides what
+    a state means: a pay link, for one, stays readable after it was paid). None if unknown."""
+    e = t.expectations
+    row = conn.execute(select(e).where(e.c.kind == kind, e.c.token_hash == _hash(token))).first()
+    return Expectation.of(row) if row else None
+
+
 def pending(conn: Connection, t: RuntimeTables, kind: str, key: str) -> Expectation | None:
     """The live, unanswered expectation for this kind and key, if any."""
     e = t.expectations

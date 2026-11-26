@@ -6,6 +6,22 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.51.0] - 2026-11-27
+### Added
+- `meydan.pay.dues` (experimental): what an actor owes for one of the app's subjects, until a
+  deadline. `define_table(name="pay_dues")` (one open due per subject and payer); the app's
+  `Subject` handler per kind (`payable` -> `Payable` / `NotPayable`, `on_paid`, `on_released`);
+  `Dues.open` (the live one and the same link when asked again), `link` (the token kept sealed
+  with meydan.vault, so the same link goes out again and old buttons keep working), `resolve`
+  (open and in time, or paid until `readable_until`: the person's own paid page),
+  `checkout_handler` (a checkout of `due:<id>` -> its due, each transition once: paid, late paid,
+  refund unless another attempt pays it, withdrawn), `cancel`, `expire`.
+- `meydan.runtime.expect.by_token(conn, tables, token, kind=)`: the expectation a token was made
+  for, in any state.
+
+### Upgrading
+- New table when an app takes `meydan.pay.dues` (its migration adds it). Nothing else changes.
+
 ## [0.50.1] - 2026-11-27
 ### Fixed
 - `meydan.pay.checkout.define_table`: the id is made by meydan (`meydan.ids.uuid7`), not by a
