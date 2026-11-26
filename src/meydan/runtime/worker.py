@@ -12,7 +12,7 @@ from typing import Any
 from sqlalchemy import Connection, exists, func, or_, select, update
 from sqlalchemy.dialects.postgresql import distinct_on
 
-from meydan.channels.base import Address, Inbound, Outbound
+from meydan.channels.base import Address, Inbound, Outbound, seen_kind
 from meydan.observe.context import TurnContext, turn_scope
 from meydan.observe.record import write_turn
 from meydan.runtime.failures import Failure, classify
@@ -158,8 +158,8 @@ class Worker(_Part):
         if download is None or not self.cfg.fetch_media:
             return
         for r in rows:
-            if r["kind"] not in self.cfg.fetch_media or r.get("media"):
-                continue
+            if seen_kind(r["kind"], r["payload"]) not in self.cfg.fetch_media or r.get("media"):
+                continue  # a photo sent as a file counts as a photo (seen_kind)
             try:
                 got = await download(_inbound(r))
                 if got is not None:

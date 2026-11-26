@@ -71,6 +71,17 @@ RECEIVED_MAX_BYTES = 20 * 1024 * 1024
 MEDIA_KINDS = frozenset({"image", "video", "audio", "voice", "document", "sticker"})
 
 
+def seen_kind(kind: str, payload: dict[str, Any] | None) -> str:
+    """What a message is to the people reading it: a photo sent "as a file" (a document whose
+    type is an image: WhatsApp and Telegram both say so in `document.mime_type`) is a photo.
+    Everything else is its channel kind."""
+    if kind == "document":
+        mime = str(((payload or {}).get("document") or {}).get("mime_type") or "")
+        if mime.startswith("image/"):
+            return "image"
+    return kind
+
+
 def describe(kind: str, text: str, target: str | None = None) -> str:
     """What an incoming message reads as in a transcript or a turn, where its text alone would
     mislead or be empty: a photo is named ("[image] caption"), a reaction says what it is on

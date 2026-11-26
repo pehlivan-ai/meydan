@@ -6,6 +6,18 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.46.0] - 2026-11-26
+### Added
+- `meydan.channels.base.seen_kind(kind, payload)`: a photo sent "as a file" (a document whose
+  `document.mime_type` is an image, on WhatsApp and Telegram) is a photo: fetched and kept like
+  one (`fetch_media`), read as `[image] caption` in turns and transcripts, shown as an image by
+  `meydan.observe`. Other documents are not downloaded.
+- Telegram: messages with a document are kind `document` (were `unknown`); `download_media`
+  fetches a document's file too.
+
+### Upgrading
+- No table changes.
+
 ## [0.45.0] - 2026-11-26
 ### Added
 - Photos people send (docs/media.md, "Files people send us"): channels download them

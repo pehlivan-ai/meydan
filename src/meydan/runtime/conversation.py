@@ -6,7 +6,7 @@ from datetime import datetime
 
 from sqlalchemy import Connection, select
 
-from meydan.channels.base import REACTION, describe
+from meydan.channels.base import REACTION, describe, seen_kind
 from meydan.runtime.tables import RuntimeTables
 
 
@@ -41,6 +41,7 @@ def transcript(
             i.c.kind,
             i.c.reply_to,
             i.c.media,
+            i.c.payload,
         )  # fmt: skip
         .where(i.c.conversation_id == conversation_id, i.c.processed_at.is_not(None))
         .order_by(i.c.received_at.desc(), i.c.id.desc())
@@ -54,9 +55,11 @@ def transcript(
     ).all()
     on = _reacted_to(conn, t, [r.reply_to for r in ins if r.kind == REACTION and r.reply_to])
     lines = [
-        (at, id_, Said(at, "in", who, describe(kind, text or "", on.get(reply_to)), media=media))
-        for at, id_, who, text, kind, reply_to, media in ins
-    ]
+        # A photo sent as a file reads as a photo (seen_kind).
+        (at, id_, Said(at, "in", who, describe(seen_kind(kind, payload), text or "",
+                                               on.get(reply_to)), media=media))
+        for at, id_, who, text, kind, reply_to, media, payload in ins
+    ]  # fmt: skip
     lines += [
         # What an agent reads of our own message: its `recall` if it has one, else its text. The
         # row keeps the real message for the people allowed to see it (meydan.observe).

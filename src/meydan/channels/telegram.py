@@ -154,16 +154,23 @@ class Telegram:
         )
 
     async def download_media(self, message: Inbound) -> tuple[bytes, str] | None:
-        """The photo someone sent in `message`: the largest size Telegram keeps (`getFile`, then
-        the file URL, valid at least an hour). None when it carries none."""
-        sizes = (message.payload or {}).get("photo") or []
-        if message.kind != "image" or not sizes:
+        """The file someone sent in `message`: a photo's largest size, or a document (a photo
+        sent uncompressed, among others), via `getFile` and the file URL (valid at least an
+        hour). None when it carries none."""
+        payload = message.payload or {}
+        sizes = payload.get("photo") or []
+        doc = payload.get("document") or {}
+        if sizes:
+            file_id, mime = sizes[-1]["file_id"], "image/jpeg"  # Telegram re-encodes photos
+        elif doc.get("file_id"):
+            file_id, mime = doc["file_id"], doc.get("mime_type") or "application/octet-stream"
+        else:
             return None
         bot = message.to.value
         token = self._tokens.get(bot)
         if token is None:
             raise SendError(f"no token for bot {bot}", retryable=False)
-        found = await self.call(bot, "getFile", file_id=sizes[-1]["file_id"])
+        found = await self.call(bot, "getFile", file_id=file_id)
         if int(found.get("file_size") or 0) > RECEIVED_MAX_BYTES:
             raise SendError("getFile: too large", retryable=False)
         try:
@@ -172,7 +179,7 @@ class Telegram:
             raise SendError(f"file: {type(e).__name__}", retryable=True) from None  # token in URL
         if got.status_code != 200 or len(got.content) > RECEIVED_MAX_BYTES:
             raise SendError(f"file: {got.status_code}", retryable=got.status_code >= 500)
-        return got.content, "image/jpeg"  # Telegram re-encodes photos as JPEG
+        return got.content, mime
 
     async def send(self, from_number: str, to: str, message: Outbound) -> str:
         chat = int(to)
@@ -332,7 +339,10 @@ def parse_messages(bot: str, updates: Iterable[dict[str, Any]]) -> list[Inbound]
                 continue
             sender, name, attrs = _person(m["from"])
             mid = f"{bot}:{m['chat']['id']}:{m['message_id']}"
-            kind = "text" if "text" in m else "image" if "photo" in m else "unknown"
+            kind = (
+                "text" if "text" in m else "image" if "photo" in m
+                else "document" if "document" in m else "unknown"
+            )  # fmt: skip
             out.append(
                 Inbound(
                     CHANNEL, mid, to, sender, datetime.fromtimestamp(m["date"], UTC), kind,

@@ -17,6 +17,7 @@ from sqlalchemy import Connection, and_, case, func, insert, or_, select, text
 from sqlalchemy.dialects.postgresql import distinct_on
 
 from meydan.auth.core import Principal
+from meydan.channels.base import seen_kind
 from meydan.observe.engagement import SEEN_BIAS, engagement
 from meydan.runtime.tables import RuntimeTables
 from meydan.visibility import Rule, Visibility, mask
@@ -330,10 +331,9 @@ def _theirs(kind: str, payload: dict | None, media: str | None = None) -> dict:
             lat=float(loc["latitude"]), lng=float(loc["longitude"]), name=loc.get("name"),
             address=loc.get("address"),
         )  # fmt: skip
-    if kind == "image":
-        out["image"] = ImagePart(
-            media=media, caption=((payload or {}).get("image") or {}).get("caption")
-        )  # fmt: skip
+    if seen_kind(kind, payload) == "image":  # a photo, also one sent as a file
+        part = (payload or {}).get(kind) or {}
+        out["image"] = ImagePart(media=media, caption=part.get("caption"))
     return out
 
 

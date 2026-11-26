@@ -59,7 +59,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from meydan.channels.base import Outbound, describe
+from meydan.channels.base import Outbound, describe, seen_kind
 from meydan.clock import Clock
 from meydan.runtime.conversation import Said
 from meydan.tools import ToolContext, ToolError
@@ -228,7 +228,8 @@ NO_TEXT = "(a message with no text: a photo, a voice note)"
 def said(turn: Any) -> str:
     """The person's messages in a turn as the model reads them by default: each as `describe`
     reads it (a photo named, not only its caption)."""
-    return "\n".join(x for x in (describe(m.kind, m.text) for m in turn.messages) if x)
+    lines = (describe(seen_kind(m.kind, m.payload), m.text) for m in turn.messages)
+    return "\n".join(x for x in lines if x)
 
 
 class AgentHandler:

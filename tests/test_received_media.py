@@ -279,3 +279,42 @@ async def test_the_team_sees_a_received_photo_like_the_message_it_came_in(db):
         assert query.media(c, t, nobody, key, visibility=Visibility.need_to_know()) is None
         line = query.conversation(c, t, reader, conversation, visibility=visibility).lines[0]
     assert line.image and line.image.media == key
+
+
+# --- a photo sent "as a file" ------------------------------------------------------------------
+
+
+def document_message(mid: str, mime: str, caption: str = "") -> Inbound:
+    sender, to = Address("tel", "+905550000001"), Address("wa-pnid", "222")
+    payload = {"id": mid, "type": "document", "document": {
+        "id": f"media-{mid}", "mime_type": mime, "filename": "x", "caption": caption}}  # fmt: skip
+    return Inbound("whatsapp", mid, to, sender, T0, "document", caption, payload)
+
+
+def test_a_document_that_is_an_image_is_seen_as_a_photo():
+    from meydan.channels.base import seen_kind
+
+    assert seen_kind("document", {"document": {"mime_type": "image/png"}}) == "image"
+    assert seen_kind("document", {"document": {"mime_type": "application/pdf"}}) == "document"
+    assert seen_kind("image", None) == "image"
+
+
+async def test_a_photo_sent_as_a_file_is_kept_and_read_as_a_photo_a_pdf_is_not(db):
+    turns = []
+
+    async def reply(turn):
+        turns.append(turn)
+        return []
+
+    ch = PhotoChannel()
+    rt = runtime(db, reply, channel=ch)
+    receive(rt, [document_message("d1", "image/png", "ne bu")])
+    await rt.work_once()
+    receive(rt, [document_message("d2", "application/pdf")])
+    await rt.work_once()
+    assert ch.asked == ["d1"]  # the PDF is not downloaded
+    assert turns[0].messages[0].media and turns[1].messages[0].media is None
+    with rt.engine.connect() as c:
+        conversation = c.scalar(select(rt.t.conversations.c.id))
+        lines = rt.transcript(c, conversation)
+    assert [x.text for x in lines] == ["[image] ne bu", "[document]"]
