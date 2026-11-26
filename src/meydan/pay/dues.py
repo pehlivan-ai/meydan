@@ -16,6 +16,10 @@ States: `open` until paid or the deadline; `paid` while a checkout of it is paid
 passed, nothing paid) and `cancelled` (closed by the app). Each transition happens once
 (`UPDATE ... WHERE state = ...`), so a result reported twice can't fulfil twice; the app's handler
 runs in the same transaction.
+
+Facts (meydan.events), in the same transaction: `due.opened` when a due is opened (once per due),
+`due.<state>` on each transition (`due.paid`, `due.expired`, `due.cancelled`, `due.refund_pending`,
+`due.refunded`), `subject_id` the due's id. meydan.pay.notices turns them into messages.
 """
 
 import logging
@@ -45,6 +49,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import UUID
 
+from meydan.events import emit
 from meydan.ids import uuid7
 from meydan.pay.checkout import Checkout, Status
 from meydan.runtime import expect
@@ -293,6 +298,8 @@ class Dues:
                 actor_id=actor_id, action=f"due:open:{kind}"[:60], subject_id=due_id
             )
         )
+        emit(conn, self.tables, "due.opened", key=str(due_id), subject_id=due_id,
+             data={"subject": subject})  # fmt: skip
         return self.get(conn, due_id), token  # type: ignore[return-value]
 
     def _ttl(self, deadline: datetime) -> timedelta:
@@ -357,6 +364,7 @@ class Dues:
                 actor_id=moved.actor_id, action=f"due:{to}:{moved.kind}"[:60], subject_id=moved.id
             )
         )
+        emit(conn, self.tables, f"due.{to}", subject_id=moved.id, data={"subject": moved.subject})
         return moved
 
     def _paid_elsewhere(self, conn: Connection, checkouts: Table, due: Due, but: uuid.UUID) -> bool:

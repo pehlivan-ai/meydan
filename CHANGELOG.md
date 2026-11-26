@@ -6,6 +6,23 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.52.0] - 2026-11-27
+### Added
+- `meydan.pay.notices` (experimental): a due's facts become messages to the person, once per
+  (due, notice), right after the agent's reply when a turn is running in their conversation (at
+  most `max_wait_s` later), at once otherwise. `Notice(on, name, card, skip=, at=)`, `opened`,
+  `paid`, `before_deadline`; `Notices(...).subscribers()` (one per notice). Patterns from Novu
+  (dedupe key, `skip`) and Inngest (debounce with a maximum wait, sleep until, cancel when paid).
+- `meydan.pay.dues` writes facts (meydan.events) in the change's transaction: `due.opened` (once
+  per due), `due.<state>` on each transition.
+- `meydan.runtime.reach`: `reach(conn, tables, rules, actor_id)` (where a person last wrote: the
+  conversation, our endpoint, their address, whether the reply window is open) and
+  `busy(conn, tables, conversation_id)` (a message of theirs not answered yet).
+
+### Upgrading
+- No table changes. An app with dues now emits their facts; nothing subscribes until it adds
+  notices.
+
 ## [0.51.1] - 2026-11-27
 ### Added
 - `Dues(kind=)`: the kind its links' expectations are recorded as (default `pay`), so an app that

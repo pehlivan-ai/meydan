@@ -141,24 +141,36 @@ returned, not doubled.
 
 ## Notices
 
-Rules in code, per subject kind:
+**Available since 0.52.0** (`meydan.pay.notices`). A due's facts (`due.opened`, `due.paid`,
+`due.expired`, ... written by `Dues` in the change's transaction, meydan.events) become messages
+to the person. Patterns from notification and workflow engines (Novu: a dedupe key per trigger,
+`skip` per step; Inngest: debounce with a maximum wait, sleep until a time, cancel when paid):
 
 ```python
-notices = [
-    pay.Opened(card=pay_card),  # the pay card
-    pay.Paid(card=paid_card),  # the confirmation
-    pay.Abandoned(after=timedelta(hours=2)),  # a checkout opened, nothing paid
-    pay.Before("deadline", timedelta(hours=24)),  # one reminder
-]
+from meydan.pay import notices as pay_notices
+
+notices = pay_notices.Notices(
+    engine,
+    runtime,
+    dues,
+    [
+        pay_notices.opened(pay_card),  # the pay card; not if paid or closed before it went
+        pay_notices.paid(paid_card),  # the confirmation
+        pay_notices.before_deadline(reminder_card, timedelta(hours=24)),  # once, if still open
+    ],
+)
+runtime = Runtime(..., subscribers=notices.subscribers())  # one subscriber per notice
 ```
 
-meydan delivers each one **once per (due, rule)** (outbox ref `pay:<due>:<rule>`), audited:
-- inside the channel's window as an interactive card; outside it as the approved template the rule
-  names; with neither, recorded as not delivered, with the reason, for the team to see;
-- **in the turn**: if the due opened while the actor's conversation has a turn running (the agent's
-  tool caused it), the card joins that turn's reply after the model's bubbles; if the model already
-  attached the same card, not twice. Otherwise it goes on its own (the team did it in ops, a sweep
-  did it). The rule decides that a card goes; the turn decides only where.
+A card is `card(conn, due, reach) -> list[Outbound] | None`: `reach.window_open` says whether the
+channel's reply window is open (a free-form card) or closed (an approved template; the sender
+holds one still under review). meydan delivers each one **once per (due, notice)** (outbox ref
+`pay:<due>:<name>`), where the person last wrote (`meydan.runtime.reach`):
+- **after the agent's reply**: while a turn is about to run or running in that conversation (a
+  message of theirs not answered yet: `meydan.runtime.reach.busy`), it waits, at most `max_wait_s`
+  after the fact (a stuck turn never holds it back);
+- otherwise at once (a due opened from a console, a sweep);
+- `skip(due)` as the due stands then; `at(due)`: not before that time.
 
 ## Surfaces
 
