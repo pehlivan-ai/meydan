@@ -5,7 +5,7 @@ from datetime import timedelta
 from conftest import T0, FakeChannel, msg, receive, runtime
 from sqlalchemy import func, select
 
-from meydan.channels.base import Address, Outbound
+from meydan.channels.base import Address, Inbound, Outbound
 from meydan.runtime import Turn
 
 PHONE = "+905550000001"  # fake numbers and ids only: this is a public repository
@@ -214,3 +214,64 @@ async def test_a_receipt_with_one_address_changes_nothing(db):
     plan(rt, Address("tel", PHONE))
     receive(rt, statuses=[receipt(user=None)])
     assert people(rt) == 0
+
+
+# --- reactions: recorded, read back, never answered -----------------------------------------
+
+
+def test_describe_names_what_text_alone_would_not():
+    from meydan.channels.base import describe
+
+    assert describe("text", "selam") == "selam"
+    assert describe("image", "afiş bu mu?") == "[image] afiş bu mu?"
+    assert describe("audio", "") == "[audio]"
+    assert describe("location", "") == "[location]"
+    assert (
+        describe("reaction", "🙏", "Tamamdır, bekleriz") == '[reaction 🙏 to "Tamamdır, bekleriz"]'
+    )
+    assert describe("reaction", "") == ""  # taken back
+
+
+async def test_a_reaction_opens_no_turn_and_the_transcript_reads_it_with_its_message(db):
+    turns = []
+
+    async def reply(turn):
+        turns.append(turn)
+        return [Outbound.text_message("Tamamdır, bekleriz")]
+
+    rt = runtime(db, reply)
+    receive(rt, [msg("w1", "olursa yazarım", T0)])
+    await rt.work_once()
+    await rt.send_once()  # ours goes out as wamid.1
+    react = Inbound(
+        "whatsapp", "w2", Address("wa-pnid", "222"), Address("tel", "+905550000001"),
+        T0 + timedelta(seconds=5), "reaction", "🙏", {"id": "w2"}, reply_to="wamid.1",
+    )  # fmt: skip
+    receive(rt, [react])
+    await rt.work_once()
+    assert len(turns) == 1  # nobody answers a 🙏
+    with rt.engine.connect() as c:
+        conversation = c.scalar(select(rt.t.conversations.c.id))
+        said = rt.transcript(c, conversation)
+    assert [s.text for s in said] == [
+        "olursa yazarım",
+        "Tamamdır, bekleriz",
+        '[reaction 🙏 to "Tamamdır, bekleriz"]',
+    ]
+
+
+async def test_an_app_may_answer_reactions(db):
+    turns = []
+
+    async def reply(turn):
+        turns.append(turn)
+        return []
+
+    rt = runtime(db, reply, answer_reactions=True)
+    react = Inbound(
+        "whatsapp", "w9", Address("wa-pnid", "222"), Address("tel", "+905550000001"),
+        T0, "reaction", "❤️", {"id": "w9"}, reply_to="wamid.x",
+    )  # fmt: skip
+    receive(rt, [react])
+    await rt.work_once()
+    assert len(turns) == 1

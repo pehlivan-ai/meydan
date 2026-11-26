@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from sqlalchemy import Connection, case, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
-from meydan.channels.base import Inbound, StatusUpdate, TemplateUpdate
+from meydan.channels.base import REACTION, Inbound, StatusUpdate, TemplateUpdate
 from meydan.runtime import identity, templates
 from meydan.runtime.tables import RuntimeTables
 from meydan.runtime.types import _STATUS_RANK, Intercepted, _clock, _Part  # noqa: F401 (Intercepted: re-export)
@@ -95,7 +95,8 @@ class Receiver(_Part):
             if inserted:
                 for observe in self.on_receive:
                     observe(conn, m, routed)
-                self._intercept(conn, m, routed, inserted[0][0])
+                if not self._intercept(conn, m, routed, inserted[0][0]):
+                    self._settle_reaction(conn, m, inserted[0][0])
         for s in statuses:
             self._apply_status(conn, s)
             if len(s.recipient) > 1:  # phone + BSUID in one signed receipt: the same person
@@ -105,10 +106,19 @@ class Receiver(_Part):
         templates.record_all(conn, self.t, template_updates)
         return new
 
+    def _settle_reaction(self, conn: Connection, m: Inbound, inbox_id: uuid.UUID) -> None:
+        """A reaction needs no answer: recorded as consumed, so no turn runs for it (and the
+        transcript reads it back next time). `RuntimeConfig.answer_reactions` turns this off."""
+        if m.kind != REACTION or self.cfg.answer_reactions:
+            return
+        i = self.t.inbox
+        conn.execute(update(i).where(i.c.id == inbox_id).values(processed_at=_clock()))
+
     def _intercept(
         self, conn: Connection, m: Inbound, routed: "identity.Routed", inbox_id: uuid.UUID
-    ) -> None:
-        """Let interceptors consume a new message before any turn (first one wins)."""
+    ) -> bool:
+        """Let interceptors consume a new message before any turn (first one wins).
+        True: one did."""
         for intercept in self.intercept:
             result = intercept(conn, m, routed)
             if result is None:
@@ -126,7 +136,8 @@ class Receiver(_Part):
                 recipient_identity_id=routed.sender_identity_id,
                 messages=result.replies,
             )
-            return
+            return True
+        return False
 
     def _apply_status(self, conn: Connection, s: StatusUpdate) -> None:
         o = self.t.outbox

@@ -62,6 +62,8 @@ def _text_of(message: dict[str, Any]) -> str:
     for media in ("image", "video", "document"):
         if kind == media:
             return message.get(media, {}).get("caption", "")
+    if kind == "reaction":  # the emoji; "" when they took a reaction back
+        return message.get("reaction", {}).get("emoji", "")
     if kind == "contacts":  # names only: numbers stay in the payload (`shared_contacts`)
         names = [c.get("name", {}).get("formatted_name", "") for c in message.get("contacts", [])]
         return ", ".join(n for n in names if n)
@@ -225,7 +227,10 @@ def parse_messages(payload: dict[str, Any], portfolio: str = "") -> list[Inbound
                     sender_name=profile.get("name"),
                     also=(user,) if phone and user else (),
                     attrs={"username": profile["username"]} if profile.get("username") else {},
-                    reply_to=(m.get("context") or {}).get("id"),
+                    # what it answers: a quoted reply or button press (context), or the message
+                    # a reaction is on
+                    reply_to=(m.get("context") or {}).get("id")
+                    or (m.get("reaction") or {}).get("message_id"),
                 )
             )
     return out

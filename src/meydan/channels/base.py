@@ -61,6 +61,32 @@ class Inbound:
     reply_to: str | None = None
 
 
+REACTION = "reaction"  # an Inbound's kind when it is an emoji on a message (`reply_to`)
+# Kinds whose `text` is only a caption: what was sent is named in front of it when read back.
+MEDIA_KINDS = frozenset({"image", "video", "audio", "voice", "document", "sticker"})
+
+
+def describe(kind: str, text: str, target: str | None = None) -> str:
+    """What an incoming message reads as in a transcript or a turn, where its text alone would
+    mislead or be empty: a photo is named ("[image] caption"), a reaction says what it is on
+    (`target`: that message's text). Plain text is itself. "" for a reaction taken back."""
+    if kind == REACTION:
+        if not text:
+            return ""
+        on = f' to "{_short(target)}"' if target else ""
+        return f"[reaction {text}{on}]"
+    if kind in MEDIA_KINDS:
+        return f"[{kind}] {text}".strip()
+    if not text and kind not in ("text", "unknown"):
+        return f"[{kind}]"
+    return text
+
+
+def _short(text: str, n: int = 80) -> str:
+    one = " ".join(text.split())
+    return one if len(one) <= n else one[: n - 1] + "…"
+
+
 @dataclass(frozen=True)
 class StatusUpdate:
     """The fate of a message we sent, reported asynchronously by the channel."""

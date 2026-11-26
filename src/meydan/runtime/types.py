@@ -94,6 +94,9 @@ class RuntimeConfig:
     # "Seen" and "typing…": a style name ("human", "instant", "quiet") or a Presence with numbers.
     presence: Presence | str = field(default_factory=Presence.human)
     expect_sweep_s: float = 30.0  # how often overdue expectations are closed (Runtime(expect=))
+    # A reaction (an emoji on a message) is recorded and read back in the transcript, but opens
+    # no turn: nobody answers a 🙏. True: the agent gets a turn for it like any message.
+    answer_reactions: bool = False
 
 
 _STATUS_RANK = {"pending": 0, "sent": 1, "delivered": 2, "read": 3}

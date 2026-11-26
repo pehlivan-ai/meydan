@@ -6,6 +6,30 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.44.0] - 2026-11-26
+### Added
+- Reactions (an emoji on a message): WhatsApp's `reaction` messages are parsed: `kind`
+  "reaction" (`meydan.channels.base.REACTION`), `text` the emoji ("" when taken back),
+  `reply_to` the channel id of the message it is on.
+- `meydan.channels.base.describe(kind, text, target=None)`: what an incoming message reads as
+  where its text alone would mislead or be empty: "[image] caption", "[audio]", a reaction as
+  `[reaction 🙏 to "…"]` (`target`: that message's text), plain text as itself.
+  `MEDIA_KINDS` lists the kinds whose text is only a caption.
+- `RuntimeConfig.answer_reactions` (default False).
+
+### Changed
+- A reaction opens no turn: it is stored as consumed (`processed_at`) when it arrives, so nobody
+  answers a 🙏. `answer_reactions=True` gives the handler a turn for it like any message.
+- `transcript` reads incoming messages through `describe`: a photo is named, a reaction says
+  which message it is on (ours: its recall, else its text). Lines that were empty (a photo
+  without a caption, a voice note) are no longer dropped from an agent's history.
+- `meydan.agent`: the default prompt of a turn reads each message through `describe`
+  (`meydan.agent.said(turn)`); an app's own `said` is unchanged.
+
+### Upgrading
+- No table changes. An app that wants its agent to answer reactions sets
+  `RuntimeConfig(answer_reactions=True)`.
+
 ## [0.43.0] - 2026-11-26
 ### Added
 - Connections also hold what we need to call them (`meydan.bridge.connections`): credential

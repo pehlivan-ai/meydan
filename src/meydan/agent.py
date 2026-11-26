@@ -53,7 +53,7 @@ from pydantic_ai.messages import (
     UserPromptPart,
 )
 
-from meydan.channels.base import Outbound
+from meydan.channels.base import Outbound, describe
 from meydan.clock import Clock
 from meydan.runtime.conversation import Said
 from meydan.tools import ToolContext, ToolError
@@ -199,6 +199,12 @@ NOW_NOTE = (
 NO_TEXT = "(a message with no text: a photo, a voice note)"
 
 
+def said(turn: Any) -> str:
+    """The person's messages in a turn as the model reads them by default: each as `describe`
+    reads it (a photo named, not only its caption)."""
+    return "\n".join(x for x in (describe(m.kind, m.text) for m in turn.messages) if x)
+
+
 class AgentHandler:
     """An agent as a turn handler. Built by `handler`; call it with a turn, as the runtime does.
 
@@ -233,7 +239,7 @@ class AgentHandler:
             lines.append(f"Now ({self.clock.zone}): {self.clock.format_datetime(self.clock.now())}")
         if self.now is not None:
             lines.extend(self.now(turn))
-        text = self.said(turn) if self.said is not None else (turn.text or NO_TEXT)
+        text = self.said(turn) if self.said is not None else (said(turn) or NO_TEXT)
         return f"{text}\n\n(" + "\n".join(lines) + ")" if lines else text
 
     def messages(self, output: Any, turn: Any) -> list[Outbound]:

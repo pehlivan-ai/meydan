@@ -437,3 +437,12 @@ async def test_a_template_with_an_image_header_and_numbered_parameters():
                       "parameters": [{"type": "image", "image": {"id": "media.7"}}]}  # fmt: skip
     assert body == {"type": "body", "parameters": [{"type": "text", "text": "A"},
                                                    {"type": "text", "text": "B"}]}  # fmt: skip
+
+
+def test_a_reaction_is_its_emoji_on_the_message_it_is_on():
+    react = {"from": "905550000001", "id": "w2", "timestamp": "1793000000", "type": "reaction",
+             "reaction": {"message_id": "wamid.OURS", "emoji": "🙏"}}  # fmt: skip
+    back = {**react, "id": "w3", "reaction": {"message_id": "wamid.OURS"}}  # taken back
+    m, gone = parse_messages(webhook(messages=[react, back]))
+    assert (m.kind, m.text, m.reply_to) == ("reaction", "🙏", "wamid.OURS")
+    assert (gone.text, gone.reply_to) == ("", "wamid.OURS")
