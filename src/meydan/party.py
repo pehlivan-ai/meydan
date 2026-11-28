@@ -103,6 +103,7 @@ class Door(StrEnum):
     ADDRESS = "address"
     CODE = "code"
     CLAIM = "claim"
+    ASSIGNED = "assigned"  # put in by someone who arranges it (an organizer pairing people)
 
 
 Circle = Literal["auto", "ask", "none"]  # a seam: whether accepting joins people's circles
@@ -383,8 +384,10 @@ class Parties:
         by: uuid.UUID,
         role: str = "host",
         data: dict[str, Any] | None = None,
-    ) -> tuple[Party, Seat]:
-        """A party of `kind` with its creator in the first seat (accepted)."""
+        seated: bool = True,
+    ) -> tuple[Party, Seat | None]:
+        """A party of `kind` with its creator in the first seat (accepted). `seated=False`: made
+        by someone who arranges it without taking part (an organizer); no seat for them."""
         k = self.kind(kind)
         p, s = self.pt.parties, self.pt.seats
         row = conn.execute(
@@ -393,6 +396,8 @@ class Parties:
             .returning(p)
         ).one()  # fmt: skip
         party = Party.of(row)
+        if not seated:
+            return party, None
         seat_row = conn.execute(
             insert(s).values(party_id=party.id, role=role, state=SeatState.ACCEPTED.value,
                              actor_id=by, door=Door.CREATED.value, answered_at=_now())
@@ -430,6 +435,32 @@ class Parties:
         seat = Seat.of(seat_row)
         self._emit(conn, "seat.invited", party, seat, None)
         return seat
+
+    def assign(self, conn: Connection, party_id: uuid.UUID, actor_id: uuid.UUID, *,
+               by: uuid.UUID, role: str = "guest") -> Outcome:  # fmt: skip
+        """Door "assigned": put someone straight into a seat, by someone who arranges it (an
+        organizer pairing two people who asked to be matched). No invitation: the app has their
+        consent already. SeatError: closed, full, already_in. Runs the kind's `on_accepted`."""
+        p, s = self.pt.parties, self.pt.seats
+        row = conn.execute(select(p).where(p.c.id == party_id).with_for_update()).first()
+        if row is None or row.state == PartyState.CANCELLED.value:
+            raise SeatError("closed")
+        party = Party.of(row)
+        if party.capacity.max is not None and self._held(conn, party.id) >= party.capacity.max:
+            raise SeatError("full")
+        if self.held_by(conn, party.kind, party.subject, actor_id) is not None:
+            raise SeatError("already_in")
+        seat = Seat.of(conn.execute(
+            insert(s).values(party_id=party.id, role=role, state=SeatState.ACCEPTED.value,
+                             actor_id=actor_id, invited_by=by, door=Door.ASSIGNED.value,
+                             answered_at=_now())
+            .returning(s)
+        ).one())  # fmt: skip
+        self._emit(conn, "seat.accepted", party, seat, Door.ASSIGNED)
+        party = self._maybe_confirmed(conn, party)
+        h = self.kind(party.kind).handler
+        replies = tuple(h.on_accepted(conn, party, seat, Door.ASSIGNED)) if h else ()
+        return Outcome(party, seat, replies)
 
     def _held(self, conn: Connection, party_id: uuid.UUID) -> int:
         s = self.pt.seats

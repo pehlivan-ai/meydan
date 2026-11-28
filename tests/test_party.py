@@ -282,3 +282,24 @@ def test_a_seat_taken_by_another_door_cancels_the_unsent_ask_and_proposes_the_ad
             .where(i.c.value == GUEST_PHONE)
         ).all()
     assert [tuple(r) for r in claims] == [(guest, "proposed", "invitation")]
+
+
+def test_an_organizer_makes_a_party_without_a_seat_and_assigns_people_into_it(world):
+    """Someone who arranges it (an organizer) takes no seat; people put in by them are in at
+    once (door assigned), the ceiling and one seat per subject still hold."""
+    rt, parties, duo = world
+    organizer, a, b, c_ = actor(rt), actor(rt), actor(rt), actor(rt)
+    with rt.engine.begin() as c:
+        party, seat = parties.create(c, "demo.duo", subject="match:2", by=organizer, seated=False)
+        assert seat is None and parties.seats(c, party.id) == []
+        first = parties.assign(c, party.id, a, by=organizer)
+        second = parties.assign(c, party.id, b, by=organizer)
+        with pytest.raises(pt.SeatError) as full:
+            parties.assign(c, party.id, c_, by=organizer)
+        other, _ = parties.create(c, "demo.duo", subject="match:2", by=organizer, seated=False)
+        with pytest.raises(pt.SeatError) as twice:
+            parties.assign(c, other.id, a, by=organizer)
+    assert first.seat.door == pt.Door.ASSIGNED and first.seat.invited_by == organizer
+    assert second.party.state == pt.PartyState.CONFIRMED
+    assert full.value.reason == "full" and twice.value.reason == "already_in"
+    assert [h[2] for h in duo.heard] == ["assigned", "assigned"]

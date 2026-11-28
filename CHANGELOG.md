@@ -6,6 +6,15 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.54.0] - 2026-11-28
+### Added
+- `meydan.party`: a party made by someone who arranges it without taking part
+  (`create(..., seated=False)`, returns `(party, None)`), and `assign(party_id, actor_id, by=)`:
+  door `assigned`, straight into a seat (an organizer pairing people).
+### Upgrade
+- The seats' `door` CHECK gains `assigned`: apps that created `meydan.party` tables add it in a
+  migration (drop and re-add the check, `NOT VALID` then `VALIDATE`).
+
 ## [0.53.1] - 2026-11-28
 ### Fixed
 - `expect`: an expectation that closes (answered, cancelled, expired, undeliverable) cancels its

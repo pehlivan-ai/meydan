@@ -72,6 +72,13 @@ A seat taken through one door closes the others (a live ask is cancelled). Askin
 address settles nobody on a guess (`plan_contact`); when the channel later names two of their
 addresses together (a phone and a username), meydan's identity joins them.
 
+## Someone who arranges it
+An organizer can make a party without taking part (`create(..., seated=False)`: no seat for
+them), invite people into it like anyone (`invite(by=organizer)`), and put people straight into
+a seat (`assign(party_id, actor_id, by=organizer)`, door **assigned**: no invitation, the app
+already has their consent, say two people who asked to be matched). The ceiling and one seat
+per subject still hold; the kind's `on_accepted` runs as for any other door.
+
 ## Facts
 
 In the change's transaction (meydan.events), `subject_id` the seat's id (the party's for
