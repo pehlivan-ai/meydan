@@ -6,6 +6,11 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.55.1] - 2026-11-28
+### Changed
+- `Dues.settle`: `by` (who paid it, an actor such as an app's partner) also becomes the due's
+  payer when it isn't whose it is; `note` is optional.
+
 ## [0.55.0] - 2026-11-28
 ### Added
 - `meydan.pay.dues`: who pays may be someone else (`payer_id`, `Due.payer`); notices go to the

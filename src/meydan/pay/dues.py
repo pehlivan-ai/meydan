@@ -447,20 +447,23 @@ class Dues:
         return handle
 
     def settle(self, conn: Connection, due_id: uuid.UUID, *, by: uuid.UUID | None,
-               note: str, who: uuid.UUID | None = None) -> Due | None:  # fmt: skip
+               note: str | None = None, who: uuid.UUID | None = None) -> Due | None:  # fmt: skip
         """Paid outside our checkouts: an organization covers it, cash, a bank transfer. `by` is
-        who settled it (an actor: a person or an organization; None: not one we know), `note`
-        why, `who` the person who recorded it (audit). From open or expired, once; None if it
-        was in another state. The app's `on_settled` fulfils it; its link stops taking payments
-        (it opens as paid until `readable_until`)."""
+        who paid it (an actor: a person or an organization, e.g. an app's partner; None: not one
+        we know); someone other than whose it is becomes its payer too. `note` why (optional),
+        `who` the person who recorded it (audit). From open or expired, once; None if it was in
+        another state. The app's `on_settled` fulfils it; its link stops taking payments (it
+        opens as paid until `readable_until`)."""
         due = self.get(conn, due_id, lock=True)
         if due is None:
             return None
         handler = getattr(self.subject(due.kind), "on_settled", None)
         if handler is None:
             raise DueError(f"subject kind {due.kind!r} has no on_settled")
+        payer = by if by is not None and by != due.actor_id else due.payer_id
         moved = self._move(conn, due, DueState.SETTLED, (DueState.OPEN, DueState.EXPIRED),
-                           paid_at=self.now(), settled_by=by, settled_note=note[:500])  # fmt: skip
+                           paid_at=self.now(), settled_by=by, payer_id=payer,
+                           settled_note=note[:500] if note else None)  # fmt: skip
         if moved is None:
             return None
         if who is not None:

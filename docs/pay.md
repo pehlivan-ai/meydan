@@ -216,8 +216,9 @@ them when set, else whose it is. Notices go to the payer by default (`Notice(to=
 whose it is (`to="owner"`), e.g. "your ticket is paid by Ayşe".
 
 `settle(due_id, by=, note=, who=)`: paid outside our checkouts (an organization covers it, cash, a
-bank transfer). From open or expired, once; state `settled`, with who settled it (`settled_by`, an
-actor: a person or an organization) and why (`settled_note`); `who` is audited as the one who
+bank transfer). From open or expired, once; state `settled`, with who paid it (`settled_by`, an
+actor: a person or an organization, e.g. an app's partner, who becomes its payer too) and,
+optionally, why (`settled_note`); `who` is audited as the one who
 recorded it. The app fulfils it in its subject's optional `on_settled(conn, due)` (without one,
 settling that kind is refused). The link then opens as paid until `readable_until`. A checkout
 paid anyway still counts (`settled` -> `paid`, `on_paid` runs): the app decides whether to refund.

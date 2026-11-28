@@ -220,6 +220,7 @@ def test_settled_outside_a_checkout_by_an_organization_once(world):
     with engine.begin() as c:
         done = dues.settle(c, due.id, by=org, note="covered by the partner", who=staff)
         assert done.state == DueState.SETTLED and done.settled_by == org and done.paid_at
+        assert done.payer == org and done.actor_id == actor  # the organization paid it
         assert dues.settle(c, due.id, by=org, note="again") is None  # once
         assert dues.resolve(c, token).id == due.id  # opens as paid until readable_until
         actions = c.scalars(select(t.audit.c.action)).all()
