@@ -216,6 +216,28 @@ async def test_the_list_shows_the_last_message_and_who_wrote_it_redacted_like_th
     assert next(r for r in full if r.actor_id != anna).last_text is not None
 
 
+async def test_the_list_is_newest_first_by_the_last_message_either_way(world):
+    """A message we sent (a template, a reminder) moves its conversation up, as its time says."""
+    rt, anna, bora = world
+    everyone = who(anna, "conversations:read:all")
+    convs = {r.actor_id: r.id for r in read(rt, query.conversations, everyone)}
+    for actor, to in ((anna, ANNA), (bora, BORA)):
+        with rt.engine.begin() as c:
+            rt.enqueue(
+                c,
+                channel="whatsapp",
+                conversation_id=convs[actor],
+                from_number="15550000000",
+                to=to,
+                messages=[Outbound.text_message("reminder")],
+                author="system",
+            )
+        rows = read(rt, query.conversations, everyone)
+        assert rows[0].actor_id == actor
+        times = [r.last_message_at for r in rows]
+        assert times == sorted(times, reverse=True)
+
+
 async def test_a_template_shows_what_it_said_and_a_code_never_shows(world):
     from meydan.channels.base import TemplateUpdate
     from meydan.runtime import templates as tpl

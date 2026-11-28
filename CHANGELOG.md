@@ -6,6 +6,12 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.52.2] - 2026-11-28
+### Fixed
+- `observe.query.conversations`: newest first by the last message either way (the time the row
+  shows), not only by the person's last message; a message or template we sent moves the
+  conversation up, and one we started without an answer is no longer at the bottom.
+
 ## [0.52.1] - 2026-11-27
 ### Added
 - `Notices.bind(runtime, dues)`: notices built before the runtime (it takes its subscribers when

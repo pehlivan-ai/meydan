@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Literal
 
 from pydantic import BaseModel
-from sqlalchemy import Connection, and_, case, func, insert, or_, select, text
+from sqlalchemy import Connection, and_, case, func, insert, or_, select
 from sqlalchemy.dialects.postgresql import distinct_on
 
 from meydan.auth.core import Principal
@@ -194,10 +194,14 @@ def conversations(
     visibility: Visibility = NEED_TO_KNOW,
     only: uuid.UUID | None = None,
 ) -> list[ConversationRow]:
-    cv, i, tu = t.conversations, t.inbox, t.turns
+    cv, i, o, tu = t.conversations, t.inbox, t.outbox, t.turns
     peer = _peer(t)
     of_inbox = i.c.conversation_id == cv.c.id
     of_turns = tu.c.conversation_id == cv.c.id
+    last_in = select(func.max(i.c.received_at)).where(of_inbox).scalar_subquery()
+    last_out = (
+        select(func.max(o.c.created_at)).where(o.c.conversation_id == cv.c.id).scalar_subquery()
+    )
     q = (
         select(
             cv.c.id,
@@ -205,13 +209,15 @@ def conversations(
             peer.c.actor_id,
             peer.c.name,
             peer.c.address,
-            select(func.max(i.c.received_at)).where(of_inbox).scalar_subquery().label("last_at"),
+            last_in.label("last_at"),
             select(func.count()).where(of_inbox).scalar_subquery().label("messages_in"),
             select(func.count()).where(of_turns).scalar_subquery().label("turns"),
             select(func.sum(tu.c.cost_usd)).where(of_turns).scalar_subquery().label("cost"),
         )
         .outerjoin(peer, peer.c.conversation_id == cv.c.id)
-        .order_by(text("last_at DESC NULLS LAST"))
+        # Newest first by the last message either way (what the row shows), not only theirs: a
+        # message or template we sent moves the conversation up, as in WhatsApp's own list.
+        .order_by(func.greatest(last_in, last_out).desc().nulls_last(), cv.c.id.desc())
         .limit(min(limit, 200))
     )
     if not visibility.sees(who, "all_conversations"):
