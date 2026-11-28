@@ -6,6 +6,18 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.53.0] - 2026-11-28
+### Added
+- `meydan.party` (experimental, docs/party.md): people in something together, each in a seat. A
+  party has a kind (the app's, `app.team`), a subject, capacity as data (`Capacity.exactly(2)`,
+  a range, no ceiling) and a state (forming, confirmed, cancelled); a seat has a role and a state
+  (invited, accepted, declined, expired, left). Three doors to a seat: an address (`ask`,
+  `ask_in`, on meydan expect, kind `party`), its short code (`redeem`, `find_code`) and a claim
+  (`invited_by`, `accept(door=CLAIM)`). The app's handler per kind runs in the change's
+  transaction (`on_accepted`, `on_released`). Facts `seat.*`, `party.confirmed`. Tables
+  `define_tables(metadata)`: the app migrates them. Gathering, plan and circle are documented
+  seams.
+
 ## [0.52.2] - 2026-11-28
 ### Fixed
 - `observe.query.conversations`: newest first by the last message either way (the time the row
