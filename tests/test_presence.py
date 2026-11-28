@@ -36,12 +36,12 @@ async def test_each_message_is_seen_once_after_the_delay(db):
     ch = FakeChannel()
     rt = runtime(db, reply, ch, debounce_s=60, max_wait_s=120, presence=Presence(read_after_s=1))
     receive(rt, [msg("w1", "selam", T0), msg("w2", "nasılsın", T0 + timedelta(seconds=1))])
-    assert await rt.events_once() == 0  # not yet: just arrived
+    assert await rt.bus_once() == 0  # not yet: just arrived
     a_second_passes(rt)
-    assert await rt.events_once() == 2
+    assert await rt.bus_once() == 2
     # Each one, whatever order the channel sent them in (a photo album shares one second).
     assert sorted(ch.events) == [("read", "w1"), ("read", "w2")]
-    assert await rt.events_once() == 0  # once
+    assert await rt.bus_once() == 0  # once
     with rt.engine.connect() as c:
         assert all(r.read_at for r in c.execute(select(rt.t.inbox)))
 
@@ -54,7 +54,7 @@ async def test_a_refused_read_receipt_is_recorded_and_tried_again(db):
     rt = runtime(db, reply, Refuses(), debounce_s=60, max_wait_s=120)
     receive(rt, [msg("w1", "selam", T0)])
     a_second_passes(rt)
-    await rt.events_once()
+    await rt.bus_once()
     with rt.engine.connect() as c:
         d = c.execute(select(rt.t.event_deliveries)).one()
         assert c.execute(select(rt.t.inbox.c.read_at)).scalar() is None  # not marked: not seen
@@ -99,7 +99,7 @@ async def test_quiet_shows_nothing(db):
     receive(rt, [msg("w1", "selam", T0)])
     with rt.engine.begin() as c:
         c.execute(update(rt.t.inbox).values(received_at=text("now() - interval '1 h'")))
-    assert await rt.events_once() == 0
+    assert await rt.bus_once() == 0
     await rt.work_once()
     await rt.send_once()
     assert ch.events == [] and [s[2] for s in ch.sent] == ["tamam"]
@@ -111,7 +111,7 @@ async def test_answered_messages_get_no_separate_read_receipt(db):
     receive(rt, [msg("w1", "selam", T0)])
     await rt.work_once()  # answered (typing off: nothing stamped read)
     a_second_passes(rt)
-    assert await rt.events_once() == 1 and ch.events == []  # handled: nothing to mark
+    assert await rt.bus_once() == 1 and ch.events == []  # handled: nothing to mark
 
 
 async def test_bubbles_stay_paced_after_a_slow_turn(db):
@@ -137,18 +137,18 @@ async def test_while_the_team_has_it_seen_waits_for_someone_on_the_team_to_open_
     ch = FakeChannel()
     rt = runtime(db, reply, ch, debounce_s=60, max_wait_s=120)  # "instant": seen at once
     receive(rt, [msg("w1", "selam", T0)])
-    await rt.events_once()  # the agent has it: seen at once
+    await rt.bus_once()  # the agent has it: seen at once
     with rt.engine.begin() as c:
         conversation = c.scalar(select(rt.t.conversations.c.id))
         operator.takeover(c, rt.t, conversation, "staff-1")
     receive(rt, [msg("w2", "orada mısınız?", T0 + timedelta(seconds=5))])
-    await rt.events_once()
+    await rt.bus_once()
     assert ch.events == [("read", "w1")]  # w1 came before the takeover; w2 waits for a person
     with rt.engine.begin() as c:
         operator.mark_read(c, rt.t, conversation, "staff-1")  # someone on the team opened it
-    await rt.events_once()
+    await rt.bus_once()
     assert ch.events == [("read", "w1"), ("read", "w2")]
     with rt.engine.begin() as c:
         operator.mark_read(c, rt.t, conversation, "staff-1")  # opened again: nothing new
-    await rt.events_once()
+    await rt.bus_once()
     assert len(ch.events) == 2

@@ -33,7 +33,7 @@ Who is who (actors, identities, claims) and how messages find their conversation
 channel webhook ─► inbound queue (idempotent on message id) ─► 200 OK
                          │
         events: message.ingested (a photo once kept) ─► "seen" ~1 s after arrival
-                (docs/events.md, docs/presence.md)
+                (docs/bus.md, docs/presence.md)
         worker: one turn per conversation at a time (Postgres advisory lock),
            once its messages are ingested
            debounce bursts ─► personal agent turn ─► tools / planner intents

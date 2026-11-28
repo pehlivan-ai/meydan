@@ -81,7 +81,7 @@ per subject still hold; the kind's `on_accepted` runs as for any other door.
 
 ## Facts
 
-In the change's transaction (meydan.events), `subject_id` the seat's id (the party's for
+In the change's transaction (meydan.bus), `subject_id` the seat's id (the party's for
 `party.confirmed`), data `{party_id, kind, subject, door, role}`: `seat.invited`, `seat.accepted`,
 `seat.declined`, `seat.expired`, `seat.left`, `party.confirmed`. Apps subscribe to send the
 invitation (`seat.invited` -> `ask` or `ask_in`) and to tell the inviter.

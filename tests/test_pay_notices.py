@@ -11,8 +11,8 @@ import pytest
 from conftest import URL, msg, receive, runtime, unavailable
 from sqlalchemy import MetaData, create_engine, func, insert, select, text, update
 
+from meydan.bus import Bus
 from meydan.channels.base import Outbound
-from meydan.events import Events
 from meydan.pay import checkout as co
 from meydan.pay import dues as pay
 from meydan.pay.dues import Dues, NotPayable, Payable
@@ -46,9 +46,9 @@ class World:
         self.windows.append(where.window_open)
         return [Outbound.text_message(f"Ödeme kartı {due.subject_id}")]
 
-    def events(self, *notices: Notice, **kw) -> Events:
+    def events(self, *notices: Notice, **kw) -> Bus:
         n = Notices(self.engine, self.rt, self.dues, notices, wait_s=0, **kw)
-        ev = Events(self.engine, self.t, n.subscribers())
+        ev = Bus(self.engine, self.t, n.subscribers())
         ev.register()
         return ev
 
@@ -180,7 +180,7 @@ async def test_someone_who_never_wrote_gets_nothing(w):
 async def test_notices_bound_after_the_runtime_was_built(w):
     actor = w.writes(datetime.now(UTC))
     n = Notices(w.engine, None, None, [opened(w.card)], wait_s=0)
-    ev = Events(w.engine, w.t, n.subscribers())
+    ev = Bus(w.engine, w.t, n.subscribers())
     ev.register()
     w.open(actor)
     await ev.drain_once()

@@ -44,7 +44,7 @@ class NotFoundError(Exception):
     """No such conversation, or no message from them to answer."""
 
 
-STAFF_READ = "conversation.read"  # a person on the team read it (meydan.events)
+STAFF_READ = "conversation.read"  # a person on the team read it (meydan.bus)
 
 
 @dataclass(frozen=True)
@@ -62,10 +62,10 @@ def mark_read(
 ) -> datetime:
     """This reader has seen everything that came in so far. Returns the mark (never moves back).
 
-    Also a fact, `conversation.read` (meydan.events): a person on the team has the conversation in
+    Also a fact, `conversation.read` (meydan.bus): a person on the team has the conversation in
     front of them, so the runtime marks what they now saw "seen" on the channel. While a
     conversation is taken over that is the only "seen" its writer gets (meydan.runtime.ingest)."""
-    from meydan.events import emit  # noqa: PLC0415
+    from meydan.bus import emit  # noqa: PLC0415
 
     r = t.operator_reads
     now = conn.scalar(select(func.now()))

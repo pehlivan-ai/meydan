@@ -23,7 +23,7 @@ passed, nothing paid) and `cancelled` (closed by the app). Each transition happe
 (`UPDATE ... WHERE state = ...`), so a result reported twice can't fulfil twice; the app's handler
 runs in the same transaction.
 
-Facts (meydan.events), in the same transaction: `due.opened` when a due is opened (once per due),
+Facts (meydan.bus), in the same transaction: `due.opened` when a due is opened (once per due),
 `due.<state>` on each transition (`due.paid`, `due.settled`, `due.expired`, `due.cancelled`,
 `due.refund_pending`, `due.refunded`), `subject_id` the due's id. meydan.pay.notices turns them
 into messages.
@@ -56,7 +56,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import UUID
 
-from meydan.events import emit
+from meydan.bus import emit
 from meydan.ids import uuid7
 from meydan.pay.checkout import Checkout, Status
 from meydan.runtime import expect

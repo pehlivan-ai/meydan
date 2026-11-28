@@ -1,29 +1,50 @@
-# Events: facts and their subscribers
+# The bus: domain events and their subscribers
 
-Available since v0.47.0 (`meydan.events`; extra `runtime`).
+Available since v0.47.0 as `meydan.events`; `meydan.bus` since v0.56.0 (extra `runtime`). The
+old name imports with a DeprecationWarning until 0.57.0, when `meydan.events` becomes organized
+events (an occasion with organizers, participation and a program).
+
+## What it is, in event-driven terms
+"Event-driven" names four different patterns (Fowler, 2017): event notification, event-carried
+state transfer, event sourcing and CQRS. The bus is the first: **event notification of domain
+events**, inside one app and across its processes:
+
+- a **transactional outbox**: `emit` writes the event in the caller's transaction;
+- a **durable publish-subscribe channel**: one delivery row per subscriber, so none misses one
+  and none waits for another;
+- a **polling relay**: each subscriber claims its rows (`FOR UPDATE SKIP LOCKED`), commits, then
+  handles;
+- **at-least-once delivery** with idempotency keys, retries with backoff and a dead letter.
+
+It is not event sourcing (state isn't rebuilt from it), not event-carried state transfer (events
+carry ids, not copies of data) and not a broker between services. Events from outside systems
+(partners' webhooks) are integration events: `meydan.bridge` takes them in, with its own inbox.
+It is cross-cutting infrastructure (like `meydan.vault` or `meydan.clock`), not a part of the
+conversation runtime: pay, party, the bridge's management and the operator use it too. The
+runtime hosts its loop (`Runtime.bus`) and its tables live in the runtime's set for now.
 
 Something happened (a message arrived, a photo was kept, a payment came in) and several parts of
 the app care, each in its own way and at its own pace: mark it seen, notify the team, tell a
-partner. `meydan.events` is the one place for that: a fact is written once, where it happened, and
+partner. `meydan.bus` is the one place for that: a fact is written once, where it happened, and
 every subscriber that wants it gets its own copy to handle, retried until it is done.
 
 ```python
-from meydan.events import Events, Later, PermanentError, Subscriber, emit
+from meydan.bus import Bus, Later, PermanentError, Subscriber, emit
 
 
 async def tell_the_team(event):  # at least once: make it idempotent
     ...  # return None (done) or Later(seconds); raise to retry
 
 
-events = Events(engine, tables, [Subscriber("team", ("message.ingested",), tell_the_team)])
-await events.run(stop)  # the runtime runs its own (Runtime.events)
+bus = Bus(engine, tables, [Subscriber("team", ("message.ingested",), tell_the_team)])
+await bus.run(stop)  # the runtime runs its own (Runtime.bus)
 
 with engine.begin() as conn:  # where it happened, in that transaction
     emit(conn, tables, "payment.paid", key=ref, data={"amount": 1500})
 ```
 
 With the runtime, pass your subscribers to it: `Runtime(..., subscribers=[...])`; its loop runs
-them with its own (`Runtime.run`), and `await runtime.events_once()` runs one pass in tests.
+them with its own (`Runtime.run`), and `await runtime.bus_once()` runs one pass in tests.
 
 ## What it promises
 
@@ -52,8 +73,8 @@ outside.
 | raises anything else | `pending` after `backoff(attempts)`, the error kept; `dead` after `max_attempts` |
 | runs past `lease_s` | cut off (a timeout: retried); a process that died mid-handler leaves a claim that `rescue` takes back |
 
-`events.retry(conn, tables, delivery_id)` puts a dead one back; `events.unsubscribe(conn, tables,
-name)` removes a subscriber you no longer run (its deliveries go with it). `Events.backlog()` and
+`bus.retry(conn, tables, delivery_id)` puts a dead one back; `bus.unsubscribe(conn, tables,
+name)` removes a subscriber you no longer run (its deliveries go with it). `Bus.backlog()` and
 `Runtime.health()` (`events_s`, `events_dead`) say whether work is waiting.
 
 ## Options

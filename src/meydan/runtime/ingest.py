@@ -1,4 +1,4 @@
-"""What happens to a message between arriving and its turn, as subscribers of meydan.events.
+"""What happens to a message between arriving and its turn, as subscribers of meydan.bus.
 
 A message is *ingested* once its content is in the system: text at once (in the receiving
 transaction), a photo once it is downloaded and kept (`Ingest`, after the webhook answered). Only
@@ -21,8 +21,8 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import Connection, func, select, update
 
+from meydan.bus import DomainEvent, Later, PermanentError, Subscriber, emit
 from meydan.channels.base import Address, Inbound, seen_kind
-from meydan.events import Event, Later, PermanentError, Subscriber, emit
 
 if TYPE_CHECKING:
     from meydan.runtime.core import Runtime
@@ -119,7 +119,7 @@ def ingest(rt: "Runtime") -> Subscriber:
             emit(conn, rt.t, INGESTED, key=str(r["id"]), subject_id=r["id"], channel=r["channel"])
             return True
 
-    async def handle(event: Event) -> Later | None:
+    async def handle(event: DomainEvent) -> Later | None:
         r = await asyncio.to_thread(_row, rt, event.subject_id) if event.subject_id else None
         if r is None:
             raise PermanentError("no such message")
@@ -148,7 +148,7 @@ def seen(rt: "Runtime") -> Subscriber:
         with rt.engine.begin() as conn:
             _set_free(rt, conn, inbox_id, read_at=func.clock_timestamp())  # a turn stamps its own
 
-    async def handle(event: Event) -> Later | None:
+    async def handle(event: DomainEvent) -> Later | None:
         r = await asyncio.to_thread(_row, rt, event.subject_id) if event.subject_id else None
         if r is None:
             raise PermanentError("no such message")
@@ -189,7 +189,7 @@ def staff_seen(rt: "Runtime") -> Subscriber:
         with rt.engine.begin() as conn:
             _set_free(rt, conn, inbox_id, read_at=func.clock_timestamp())
 
-    async def handle(event: Event) -> Later | None:
+    async def handle(event: DomainEvent) -> Later | None:
         if event.subject_id is None:
             raise PermanentError("no conversation")
         for r in await asyncio.to_thread(unread, event.subject_id):

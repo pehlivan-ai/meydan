@@ -3,7 +3,7 @@
 Experimental (docs/pay.md). The app says which fact sends what; meydan does the rest. Patterns
 from notification and workflow engines (Novu workflows: a dedupe key per trigger, `skip` per
 step; Inngest functions: debounce with a maximum wait, sleep until a time, cancel when another
-event comes), on meydan's facts (meydan.events):
+event comes), on meydan's facts (meydan.bus):
 
 - what: `Notice(on, name, card)`: when the fact `on` happens to a due ("due.opened",
   "due.paid"), `card(conn, due, reach)` makes the messages; it gets `reach.window_open`, so the
@@ -33,8 +33,8 @@ from typing import Literal
 
 from sqlalchemy import Connection, Engine, select
 
+from meydan.bus import DomainEvent, Later, Subscriber
 from meydan.channels.base import Outbound
-from meydan.events import Event, Later, Subscriber
 from meydan.pay.dues import Due, Dues, DueState
 from meydan.runtime.reach import Reach, busy, reach
 
@@ -115,7 +115,7 @@ class Notices:
         return f"pay:{due.id}:{notice.name}"
 
     def _handler(self, notice: Notice):
-        async def handle(event: Event) -> Later | None:
+        async def handle(event: DomainEvent) -> Later | None:
             if event.subject_id is None:
                 return None
             if self.runtime is None or self.dues is None:
@@ -126,7 +126,7 @@ class Notices:
 
         return handle
 
-    def _send(self, conn: Connection, due: Due, notice: Notice, event: Event) -> Later | None:
+    def _send(self, conn: Connection, due: Due, notice: Notice, event: DomainEvent) -> Later | None:
         t = self.runtime.t
         ref = self.ref(due, notice)
         if conn.execute(select(t.outbox.c.id).where(t.outbox.c.ref == ref).limit(1)).first():

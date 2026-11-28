@@ -142,7 +142,7 @@ returned, not doubled.
 ## Notices
 
 **Available since 0.52.0** (`meydan.pay.notices`). A due's facts (`due.opened`, `due.paid`,
-`due.expired`, ... written by `Dues` in the change's transaction, meydan.events) become messages
+`due.expired`, ... written by `Dues` in the change's transaction, meydan.bus) become messages
 to the person. Patterns from notification and workflow engines (Novu: a dedupe key per trigger,
 `skip` per step; Inngest: debounce with a maximum wait, sleep until a time, cancel when paid):
 

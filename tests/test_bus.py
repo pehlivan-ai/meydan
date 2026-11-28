@@ -1,4 +1,4 @@
-"""meydan.events: a fact written where it happened reaches every matching subscriber, each at its
+"""meydan.bus: a fact written where it happened reaches every matching subscriber, each at its
 own pace; at least once, retried with backoff, dead after max_attempts, never stuck."""
 
 import asyncio
@@ -6,8 +6,8 @@ import asyncio
 import pytest
 from sqlalchemy import func, select, text, update
 
-from meydan import events
-from meydan.events import Events, Later, PermanentError, Subscriber, emit
+from meydan import bus as events
+from meydan.bus import Bus, Later, PermanentError, Subscriber, emit
 
 
 class Recorder:
@@ -44,7 +44,7 @@ def due_now(engine, t):
 async def test_a_fact_reaches_every_matching_subscriber_once(db):
     engine, t = db
     a, b, other = Recorder(), Recorder(), Recorder()
-    ev = Events(engine, t, [
+    ev = Bus(engine, t, [
         Subscriber("a", ("thing.done",), a),
         Subscriber("b", ("thing.done", "thing.undone"), b),
         Subscriber("other", ("else",), other),
@@ -61,7 +61,7 @@ async def test_a_fact_reaches_every_matching_subscriber_once(db):
 
 async def test_nothing_happens_if_the_transaction_rolls_back(db):
     engine, t = db
-    ev = Events(engine, t, [Subscriber("a", ("thing.done",), Recorder())])
+    ev = Bus(engine, t, [Subscriber("a", ("thing.done",), Recorder())])
     ev.register()
     with pytest.raises(RuntimeError), engine.begin() as c:
         emit(c, t, "thing.done")
@@ -74,7 +74,7 @@ async def test_nothing_happens_if_the_transaction_rolls_back(db):
 async def test_a_key_records_the_fact_once(db):
     engine, t = db
     a = Recorder()
-    ev = Events(engine, t, [Subscriber("a", ("paid",), a)])
+    ev = Bus(engine, t, [Subscriber("a", ("paid",), a)])
     ev.register()
     with engine.begin() as c:
         first = emit(c, t, "paid", key="ref-1")
@@ -86,7 +86,7 @@ async def test_a_key_records_the_fact_once(db):
 async def test_a_channel_subscriber_gets_its_channel_and_channel_less_facts(db):
     engine, t = db
     wa, every = Recorder(), Recorder()
-    ev = Events(engine, t, [
+    ev = Bus(engine, t, [
         Subscriber("wa", ("message.ingested",), wa, channel="whatsapp"),
         Subscriber("every", ("message.ingested",), every),
     ])  # fmt: skip
@@ -103,7 +103,7 @@ async def test_a_channel_subscriber_gets_its_channel_and_channel_less_facts(db):
 async def test_a_delay_holds_a_delivery_until_its_time(db):
     engine, t = db
     a = Recorder()
-    ev = Events(engine, t, [Subscriber("a", ("x",), a, delay_s=60)])
+    ev = Bus(engine, t, [Subscriber("a", ("x",), a, delay_s=60)])
     ev.register()
     with engine.begin() as c:
         emit(c, t, "x")
@@ -115,7 +115,7 @@ async def test_a_delay_holds_a_delivery_until_its_time(db):
 async def test_later_puts_it_off_without_counting_an_attempt(db):
     engine, t = db
     a = Recorder(Later(30))
-    ev = Events(engine, t, [Subscriber("a", ("x",), a)])
+    ev = Bus(engine, t, [Subscriber("a", ("x",), a)])
     ev.register()
     with engine.begin() as c:
         emit(c, t, "x")
@@ -131,7 +131,7 @@ async def test_later_puts_it_off_without_counting_an_attempt(db):
 async def test_a_failure_is_retried_with_backoff_then_dead(db):
     engine, t = db
     a = Recorder(RuntimeError("down"), RuntimeError("down"))
-    ev = Events(engine, t, [Subscriber("a", ("x",), a, max_attempts=2)])
+    ev = Bus(engine, t, [Subscriber("a", ("x",), a, max_attempts=2)])
     ev.register()
     with engine.begin() as c:
         emit(c, t, "x")
@@ -152,7 +152,7 @@ async def test_a_failure_is_retried_with_backoff_then_dead(db):
 
 async def test_a_permanent_error_is_dead_at_once_with_its_reason(db):
     engine, t = db
-    ev = Events(engine, t, [Subscriber("a", ("x",), Recorder(PermanentError("no such ref")))])
+    ev = Bus(engine, t, [Subscriber("a", ("x",), Recorder(PermanentError("no such ref")))])
     ev.register()
     with engine.begin() as c:
         emit(c, t, "x")
@@ -164,7 +164,7 @@ async def test_a_permanent_error_is_dead_at_once_with_its_reason(db):
 async def test_one_failing_subscriber_never_holds_up_another(db):
     engine, t = db
     good = Recorder()
-    ev = Events(engine, t, [
+    ev = Bus(engine, t, [
         Subscriber("bad", ("x",), Recorder(RuntimeError("x"))),
         Subscriber("good", ("x",), good),
     ])  # fmt: skip
@@ -181,7 +181,7 @@ async def test_a_claim_whose_lease_ran_out_is_taken_back_and_its_late_finish_ign
     async def hangs(event):
         await asyncio.sleep(10)
 
-    ev = Events(engine, t, [Subscriber("a", ("x",), hangs, lease_s=0.05)])
+    ev = Bus(engine, t, [Subscriber("a", ("x",), hangs, lease_s=0.05)])
     ev.register()
     with engine.begin() as c:
         emit(c, t, "x")
@@ -202,10 +202,10 @@ async def test_a_claim_whose_lease_ran_out_is_taken_back_and_its_late_finish_ign
 async def test_subscriptions_are_rows_so_another_process_gets_the_fact(db):
     engine, t = db
     ops = Recorder()
-    Events(engine, t, [Subscriber("ops.notify", ("x",), ops)]).register()  # the ops process
+    Bus(engine, t, [Subscriber("ops.notify", ("x",), ops)]).register()  # the ops process
     with engine.begin() as c:  # the app process emits, knowing nothing of ops
         emit(c, t, "x")
-    assert await Events(engine, t, [Subscriber("ops.notify", ("x",), ops)]).drain_once() == 1
+    assert await Bus(engine, t, [Subscriber("ops.notify", ("x",), ops)]).drain_once() == 1
     with engine.begin() as c:
         assert events.unsubscribe(c, t, "ops.notify")
         assert c.scalar(select(func.count()).select_from(t.event_deliveries)) == 0
@@ -213,7 +213,7 @@ async def test_subscriptions_are_rows_so_another_process_gets_the_fact(db):
 
 async def test_finished_work_and_old_facts_are_pruned(db):
     engine, t = db
-    ev = Events(engine, t, [Subscriber("a", ("x",), Recorder())], keep_done=__import__(
+    ev = Bus(engine, t, [Subscriber("a", ("x",), Recorder())], keep_done=__import__(
         "datetime").timedelta(0))  # fmt: skip
     ev.register()
     with engine.begin() as c:
@@ -227,6 +227,15 @@ async def test_finished_work_and_old_facts_are_pruned(db):
 
 def test_names_must_be_unique():
     with pytest.raises(ValueError):
-        Events(
-            None, None, [Subscriber("a", ("x",), Recorder()), Subscriber("a", ("y",), Recorder())]
-        )
+        Bus(None, None, [Subscriber("a", ("x",), Recorder()), Subscriber("a", ("y",), Recorder())])
+
+
+def test_the_old_name_still_imports_and_says_where_it_went():
+    """meydan.events was the bus until 0.56 (it becomes organized events in 0.57)."""
+    import importlib
+    import sys
+
+    sys.modules.pop("meydan.events", None)
+    with pytest.warns(DeprecationWarning, match="meydan.bus"):
+        old = importlib.import_module("meydan.events")
+    assert old.Events is events.Bus and old.Event is events.DomainEvent and old.emit is events.emit

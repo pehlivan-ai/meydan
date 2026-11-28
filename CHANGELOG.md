@@ -6,6 +6,19 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.56.0] - 2026-11-28
+### Changed
+- `meydan.events` is now **`meydan.bus`** (docs/bus.md, which now says what it is in
+  event-driven terms: event notification of domain events; a transactional outbox, a durable
+  publish-subscribe channel, a polling relay, at-least-once delivery). `Events` -> `Bus`,
+  `Event` -> `DomainEvent`; `Runtime.events` -> `Runtime.bus`, `Runtime.events_once` ->
+  `Runtime.bus_once`. The tables keep their names.
+### Deprecated
+- `meydan.events` (the old names, with a DeprecationWarning), `Runtime.events`,
+  `Runtime.events_once`: removed in 0.57.0, when `meydan.events` becomes organized events.
+### Upgrade
+- `from meydan.events import ...` -> `from meydan.bus import ...` (rename `Events`, `Event`).
+
 ## [0.55.1] - 2026-11-28
 ### Changed
 - `Dues.settle`: `by` (who paid it, an actor such as an app's partner) also becomes the due's

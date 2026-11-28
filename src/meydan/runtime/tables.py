@@ -62,7 +62,7 @@ COST_SOURCES = ("provider", "estimate", "mixed")
 # dead: a handler refused it for good, or it failed too often (docs/bridges.md).
 BRIDGE_EVENT_STATUSES = ("pending", "done", "ignored", "dead")
 CONNECTION_STATUSES = ("on", "off")
-# A subscriber's copy of a fact (meydan.events): pending, to be handled (from next_at); running,
+# A subscriber's copy of a fact (meydan.bus): pending, to be handled (from next_at); running,
 # claimed until lease_until; done; dead: refused for good, or failed max_attempts times.
 EVENT_DELIVERY_STATUSES = ("pending", "running", "done", "dead")
 # How they prove their requests to us: whsec, a shared secret (Standard Webhooks v1); whpk, their
@@ -252,7 +252,7 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
         # Set when a turn consumed this message (or gave up on it).
         Column("processed_at", DateTime(timezone=True)),
         # Its content is in the system (text at once; a photo once kept, or given up on): only then
-        # is it "seen" and only then does it join a turn (meydan.events, docs/events.md).
+        # is it "seen" and only then does it join a turn (meydan.bus, docs/bus.md).
         Column("ingested_at", DateTime(timezone=True)),
         Column("attempts", Integer, nullable=False, server_default="0"),
         Column("error", Text),
@@ -724,7 +724,7 @@ def define_tables(metadata: MetaData, prefix: str = "meydan_") -> RuntimeTables:
     Index(f"ix_{prefix}bridge_rejections_connection_at", bridge_rejections.c.connection,
           bridge_rejections.c.at)  # fmt: skip
 
-    # Facts and their subscribers (meydan.events, docs/events.md): a fact is written once where it
+    # Facts and their subscribers (meydan.bus, docs/bus.md): a fact is written once where it
     # happened (`emit`, in that transaction); each subscription whose kinds and channel match gets
     # its own delivery row, claimed with SKIP LOCKED, retried with backoff, dead after max_attempts.
     events = Table(

@@ -24,7 +24,7 @@ Capacity is data on the party (`Capacity`: exactly n, a range, or no ceiling). I
 accepted seats count against its ceiling; a party is `confirmed` once its accepted seats reach its
 minimum. Each transition happens once (`UPDATE ... WHERE state = ...`).
 
-Facts (meydan.events), in the change's transaction, `subject_id` the seat's id (the party's for
+Facts (meydan.bus), in the change's transaction, `subject_id` the seat's id (the party's for
 `party.*`): `seat.invited`, `seat.accepted`, `seat.declined`, `seat.expired`, `seat.left`,
 `party.confirmed`; data: party_id, kind, subject, door.
 
@@ -61,9 +61,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 
-import meydan.runtime  # noqa: F401 (first: meydan.events and meydan.runtime import each other)
+import meydan.runtime  # noqa: F401 (first: meydan.bus and meydan.runtime import each other)
+from meydan.bus import emit
 from meydan.channels.base import Address, Outbound
-from meydan.events import emit
 from meydan.ids import uuid7
 from meydan.runtime import expect
 from meydan.runtime.identity import Routed, find, owner, propose

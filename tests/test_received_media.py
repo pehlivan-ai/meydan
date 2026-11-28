@@ -126,7 +126,7 @@ async def test_the_worker_keeps_a_photo_before_the_turn_and_the_transcript_point
     ch = PhotoChannel()
     rt = runtime(db, reply, channel=ch)
     receive(rt, [image_message("w1", "afiş bu mu?")])
-    await rt.events_once()  # Ingest: fetched and kept
+    await rt.bus_once()  # Ingest: fetched and kept
     await rt.work_once()
     [turn] = turns
     key = turn.messages[0].media
@@ -148,7 +148,7 @@ async def test_a_photo_that_cannot_be_fetched_still_gets_its_turn(db):
 
     rt = runtime(db, reply, channel=PhotoChannel(fail=True), ingest_wait_s=0)
     receive(rt, [image_message("w1")])
-    await rt.events_once()  # Ingest fails: tried again later; the turn doesn't wait (wait 0)
+    await rt.bus_once()  # Ingest fails: tried again later; the turn doesn't wait (wait 0)
     await rt.work_once()
     assert [m.media for m in turns[0].messages] == [None]
     with rt.engine.connect() as c:
@@ -162,7 +162,7 @@ async def test_received_photos_are_forgotten_after_the_retention(db):
 
     rt = runtime(db, reply, channel=PhotoChannel(), keep_received=timedelta(days=30))
     receive(rt, [image_message("w1")])
-    await rt.events_once()  # Ingest: fetched and kept
+    await rt.bus_once()  # Ingest: fetched and kept
     await rt.work_once()
     assert rt.forget_received_once() == 0  # still young
     with rt.engine.begin() as c:
@@ -183,7 +183,7 @@ async def test_a_file_we_also_sent_is_not_forgotten(db):
     data = photo(100, 100)
     rt = runtime(db, reply, channel=PhotoChannel(data))
     receive(rt, [image_message("w1")])
-    await rt.events_once()  # Ingest: fetched and kept
+    await rt.bus_once()  # Ingest: fetched and kept
     await rt.work_once()
     with engine.begin() as c:
         key = c.scalar(select(t.inbox.c.media))
@@ -226,7 +226,7 @@ async def test_with_images_on_the_turns_photo_goes_to_the_model_as_bytes(db):
                           images=True)  # fmt: skip
     rt = runtime(db, reply, channel=PhotoChannel())
     receive(rt, [image_message("w1", "bu afiş mi?")])
-    await rt.events_once()  # Ingest: fetched and kept
+    await rt.bus_once()  # Ingest: fetched and kept
     await rt.work_once()
     [image, text] = seeing.prompt
     assert isinstance(image, BinaryContent) and image.media_type == "image/jpeg"
@@ -242,7 +242,7 @@ async def test_without_images_the_model_reads_only_text(db):
 
     rt = runtime(db, reply, channel=PhotoChannel())
     receive(rt, [image_message("w1", "bu afiş mi?")])
-    await rt.events_once()  # Ingest: fetched and kept
+    await rt.bus_once()  # Ingest: fetched and kept
     await rt.work_once()
     assert seeing.prompt == "[image] bu afiş mi?"
 
@@ -274,7 +274,7 @@ async def test_the_team_sees_a_received_photo_like_the_message_it_came_in(db):
 
     rt = runtime(db, reply, channel=PhotoChannel())
     receive(rt, [image_message("w1")])
-    await rt.events_once()  # Ingest: fetched and kept
+    await rt.bus_once()  # Ingest: fetched and kept
     await rt.work_once()
     engine, t = db
 
@@ -322,10 +322,10 @@ async def test_a_photo_sent_as_a_file_is_kept_and_read_as_a_photo_a_pdf_is_not(d
     ch = PhotoChannel()
     rt = runtime(db, reply, channel=ch)
     receive(rt, [document_message("d1", "image/png", "ne bu")])
-    await rt.events_once()  # Ingest: fetched and kept
+    await rt.bus_once()  # Ingest: fetched and kept
     await rt.work_once()
     receive(rt, [document_message("d2", "application/pdf")])
-    await rt.events_once()  # Ingest: fetched and kept
+    await rt.bus_once()  # Ingest: fetched and kept
     await rt.work_once()
     assert ch.asked == ["d1"]  # the PDF is not downloaded
     assert turns[0].messages[0].media and turns[1].messages[0].media is None
@@ -356,10 +356,10 @@ async def test_a_photo_is_seen_and_answered_only_once_it_is_in_the_system(db):
     assert await rt.work_once() == 0  # not before the photo is in
     time_passes(rt)
     assert ("read", "w1") not in ch.events
-    await rt.events_once()  # Ingest; "seen" now due a second after
+    await rt.bus_once()  # Ingest; "seen" now due a second after
     assert ("read", "w1") not in ch.events
     time_passes(rt)
-    await rt.events_once()
+    await rt.bus_once()
     assert ("read", "w1") in ch.events
     assert await rt.work_once() == 1 and turns[0].messages[0].media
 
@@ -374,7 +374,7 @@ async def test_ingest_never_waits_on_a_message_a_turn_holds(db):
     receive(rt, [image_message("w1")])
     with engine.begin() as held:  # a turn that went ahead holds the row while the model thinks
         held.execute(select(t.inbox).with_for_update())
-        await asyncio.wait_for(rt.events_once(), timeout=5)
+        await asyncio.wait_for(rt.bus_once(), timeout=5)
     with engine.connect() as c:
         d = c.execute(select(t.event_deliveries)).one()
         assert c.scalar(select(t.inbox.c.ingested_at)) is None
@@ -393,5 +393,5 @@ async def test_read_once_still_works_and_says_it_is_deprecated(db):
         return []
 
     rt = runtime(db, reply)
-    with pytest.warns(DeprecationWarning, match="events_once"):
+    with pytest.warns(DeprecationWarning, match="bus_once"):
         assert await rt.read_once() == 0

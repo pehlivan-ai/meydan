@@ -33,7 +33,7 @@ from meydan.runtime import ingest
 from meydan.runtime.conversation import Said, transcript
 
 if TYPE_CHECKING:
-    from meydan.events import Subscriber
+    from meydan.bus import Subscriber
     from meydan.media import MediaStore
     from meydan.runtime.expect import Expectations
 from meydan.runtime.inbound import Receiver, Replied, replied_to
@@ -71,7 +71,7 @@ class Health:
     waiting_s: float
     sending_s: float
     dead_last_hour: int
-    # meydan.events: the oldest due delivery waiting (seconds), and deliveries given up (dead).
+    # meydan.bus: the oldest due delivery waiting (seconds), and deliveries given up (dead).
     events_s: float = 0.0
     events_dead: int = 0
 
@@ -121,11 +121,11 @@ class Runtime:
         self._receiver = Receiver(self)
         self._outbox = Outbox(self)
         self._worker = Worker(self)
-        # Facts and who acts on them (meydan.events): the runtime's own (a message ingested, then
-        # seen: meydan.runtime.ingest) and the app's, run by the same loop.
-        from meydan.events import Events  # noqa: PLC0415
+        # Domain events and who acts on them (meydan.bus): the runtime's own (a message ingested,
+        # then seen: meydan.runtime.ingest) and the app's, run by the same loop.
+        from meydan.bus import Bus  # noqa: PLC0415
 
-        self.events = Events(
+        self.bus = Bus(
             engine, tables, [*ingest.builtin(self), *subscribers], poll_s=self.cfg.poll_s
         )
 
@@ -167,20 +167,32 @@ class Runtime:
         """See `transcript`."""
         return transcript(conn, self.t, conversation_id, limit)
 
-    async def events_once(self) -> int:
+    async def bus_once(self) -> int:
         """Handle what is due for every subscriber once (a message ingested, seen; the app's):
-        `Events.drain_once`. Returns how many deliveries were handled."""
-        return await self.events.drain_once()
+        `Bus.drain_once`. Returns how many deliveries were handled."""
+        return await self.bus.drain_once()
+
+    @property
+    def events(self):
+        """Deprecated since 0.56: `Runtime.bus` (meydan.bus)."""
+        warnings.warn("Runtime.events is now Runtime.bus", DeprecationWarning, stacklevel=2)
+        return self.bus
+
+    async def events_once(self) -> int:
+        """Deprecated since 0.56: `bus_once`."""
+        warnings.warn("Runtime.events_once is now Runtime.bus_once", DeprecationWarning,
+                      stacklevel=2)  # fmt: skip
+        return await self.bus_once()
 
     async def read_once(self) -> int:
         """Deprecated since 0.47: "seen" is a subscriber now (meydan.runtime.ingest). Runs
-        `events_once`; to be removed in a later release."""
+        `bus_once`; to be removed in a later release."""
         warnings.warn(
-            "Runtime.read_once is deprecated: use Runtime.events_once (meydan.events)",
+            "Runtime.read_once is deprecated: use Runtime.bus_once (meydan.bus)",
             DeprecationWarning,
             stacklevel=2,
         )
-        return await self.events_once()
+        return await self.bus_once()
 
     async def work_once(self) -> int:
         """See `Worker.work_once`."""
@@ -220,7 +232,7 @@ class Runtime:
                 )
             )
         waiting_s, sending_s = float(waiting or 0), float(sending or 0)
-        backlog = self.events.backlog()
+        backlog = self.bus.backlog()
         return Health(
             ok=waiting_s <= max_waiting_s
             and sending_s <= max_sending_s
@@ -265,7 +277,7 @@ class Runtime:
                     await asyncio.wait_for(stop.wait(), timeout=self.cfg.media_sweep_s)
 
         await asyncio.gather(
-            self.events.run(stop),
+            self.bus.run(stop),
             loop(self.work_once, "worker"),
             loop(self.send_once, "sender"),
             sweep(),

@@ -728,7 +728,7 @@ class WhatsAppCloud:
 
     async def mark_read(self, from_number: str, message_id: str) -> None:
         """Mark a received message (and everything before it) read: "seen". Raises SendError
-        when WhatsApp refuses (the caller records it: meydan.events retries the "seen")."""
+        when WhatsApp refuses (the caller records it: meydan.bus retries the "seen")."""
         await self._post(
             from_number,
             {"messaging_product": "whatsapp", "status": "read", "message_id": message_id},
