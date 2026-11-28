@@ -209,6 +209,23 @@ until the subject's date (late refunds); dues past their deadline expire and cal
 time-based notices (`Abandoned`, `Before`) are due here. The browser is never needed for a
 payment to count.
 
+## Who pays, and paid elsewhere
+A due is someone's (`actor_id`: their registration, their ticket). Who pays it may be someone
+else: `payer_id` (a friend who buys the ticket, the one who invites, an organizer); `Due.payer` is
+them when set, else whose it is. Notices go to the payer by default (`Notice(to="payer")`), or to
+whose it is (`to="owner"`), e.g. "your ticket is paid by Ayşe".
+
+`settle(due_id, by=, note=, who=)`: paid outside our checkouts (an organization covers it, cash, a
+bank transfer). From open or expired, once; state `settled`, with who settled it (`settled_by`, an
+actor: a person or an organization) and why (`settled_note`); `who` is audited as the one who
+recorded it. The app fulfils it in its subject's optional `on_settled(conn, due)` (without one,
+settling that kind is refused). The link then opens as paid until `readable_until`. A checkout
+paid anyway still counts (`settled` -> `paid`, `on_paid` runs): the app decides whether to refund.
+
+Seams, not built: taking a due over ("I'll pay it": set `payer_id`, the next card goes to them),
+and one checkout for several dues (a basket: a group's tickets), where the provider allows it
+(some take one participant per session).
+
 ## Tables
 
 `define_tables(metadata, prefix="pay_")`: `dues`, `checkouts`, `acknowledgements`. Provider

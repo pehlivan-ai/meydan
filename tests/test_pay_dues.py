@@ -203,3 +203,38 @@ def test_an_apps_own_link_kind_is_kept(world):
         assert c.scalar(select(t.expectations.c.kind)) == "payment"
         assert mine.resolve(c, token).id == due.id
         assert dues.resolve(c, token) is None  # another kind: not ours
+
+
+def test_settled_outside_a_checkout_by_an_organization_once(world):
+    """An organization covers it (paid outside our checkouts): the app fulfils it as paid, the
+    link stops taking payments, and a payment that comes anyway still counts."""
+    engine, t, checkouts, dues, orders, clock, actor = world
+    with engine.begin() as c:
+        org = c.execute(insert(t.actors).values(kind="org").returning(t.actors.c.id)).scalar()
+        staff = c.execute(insert(t.actors).values(kind="person").returning(t.actors.c.id)).scalar()
+        due, token = dues.open(c, "order:9", actor)
+        assert due.payer == actor  # nobody else pays it
+        with pytest.raises(pay.DueError):  # this app's orders have no on_settled
+            dues.settle(c, due.id, by=org, note="covered by the partner")
+    orders.on_settled = lambda conn, d: orders.heard.append(("settled", d.subject_id))
+    with engine.begin() as c:
+        done = dues.settle(c, due.id, by=org, note="covered by the partner", who=staff)
+        assert done.state == DueState.SETTLED and done.settled_by == org and done.paid_at
+        assert dues.settle(c, due.id, by=org, note="again") is None  # once
+        assert dues.resolve(c, token).id == due.id  # opens as paid until readable_until
+        actions = c.scalars(select(t.audit.c.action)).all()
+        assert "due:settle:order" in actions and "due:settled:order" in actions
+        late = checkout(c, checkouts, due, actor, Status.PAID)
+        dues.checkout_handler(checkouts)(c, late, Status.PENDING)
+        assert dues.get(c, due.id).state == DueState.PAID  # paid anyway: the payment counts
+    assert orders.heard == [("settled", "9"), ("paid", "9", late.id)]
+
+
+def test_someone_else_pays_it_when_a_payer_is_set(world):
+    engine, t, _, dues, _, _, actor = world
+    with engine.begin() as c:
+        friend = c.execute(insert(t.actors).values(kind="person").returning(t.actors.c.id)).scalar()
+        due, _ = dues.open(c, "order:10", actor)
+        c.execute(dues.table.update().where(dues.table.c.id == due.id).values(payer_id=friend))
+        again = dues.get(c, due.id)
+    assert again.actor_id == actor and again.payer == friend

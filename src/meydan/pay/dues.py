@@ -11,15 +11,22 @@ person's pay link and is looked up by its hash. The same link is sent more than 
 card, a reminder, "send it again"), so the token is also kept sealed (meydan.vault) on the due:
 old buttons keep working, and nothing readable is stored.
 
-States: `open` until paid or the deadline; `paid` while a checkout of it is paid; `refund_pending`
+Who pays: `actor_id` is whose it is (their registration, their ticket); `payer_id`, when set, is
+someone else who pays it (a friend, the one who invited them, an organizer), and the pay cards go
+to them (`Due.payer`). A due can also be settled outside a checkout (`settle`: an organization
+covers it, cash, a bank transfer), with who settled it and why.
+
+States: `open` until paid or the deadline; `paid` while a checkout of it is paid; `settled` when it
+was paid outside our checkouts (a payment through a checkout still counts: `paid`); `refund_pending`
 / `refunded` when the provider gives the money back (nothing paid anymore); `expired` (the deadline
 passed, nothing paid) and `cancelled` (closed by the app). Each transition happens once
 (`UPDATE ... WHERE state = ...`), so a result reported twice can't fulfil twice; the app's handler
 runs in the same transaction.
 
 Facts (meydan.events), in the same transaction: `due.opened` when a due is opened (once per due),
-`due.<state>` on each transition (`due.paid`, `due.expired`, `due.cancelled`, `due.refund_pending`,
-`due.refunded`), `subject_id` the due's id. meydan.pay.notices turns them into messages.
+`due.<state>` on each transition (`due.paid`, `due.settled`, `due.expired`, `due.cancelled`,
+`due.refund_pending`, `due.refunded`), `subject_id` the due's id. meydan.pay.notices turns them
+into messages.
 """
 
 import logging
@@ -66,6 +73,7 @@ SUBJECT = "due"  # checkouts of a due are for "due:<id>"
 class DueState(StrEnum):
     OPEN = "open"
     PAID = "paid"
+    SETTLED = "settled"  # paid outside our checkouts (an organization covers it, cash, transfer)
     REFUND_PENDING = "refund_pending"
     REFUNDED = "refunded"
     EXPIRED = "expired"
@@ -85,6 +93,8 @@ def define_table(metadata: MetaData, *, prefix: str = "meydan_", name: str = "pa
         Column("id", UUID(as_uuid=True), primary_key=True, default=uuid7),
         Column("subject", Text, nullable=False),  # the app's: "registration:<uuid>"
         Column("actor_id", UUID(as_uuid=True), ForeignKey(f"{prefix}actors.id"), nullable=False),
+        # someone else who pays it (null: actor_id pays); the pay cards go to them
+        Column("payer_id", UUID(as_uuid=True), ForeignKey(f"{prefix}actors.id")),
         Column("state", Text, nullable=False),
         Column("amount", Numeric(10, 2)),  # as the app said when it opened; the provider's rules
         Column("currency", Text),
@@ -93,7 +103,10 @@ def define_table(metadata: MetaData, *, prefix: str = "meydan_", name: str = "pa
         Column("readable_until", DateTime(timezone=True)),
         Column("expectation_id", UUID(as_uuid=True), ForeignKey(f"{prefix}expectations.id")),
         Column("link_sealed", Text),  # the link's token, sealed (meydan.vault); never logged
-        Column("paid_at", DateTime(timezone=True)),
+        Column("paid_at", DateTime(timezone=True)),  # paid, or settled
+        # settled outside a checkout: by whom (an actor: a person or an organization) and why
+        Column("settled_by", UUID(as_uuid=True), ForeignKey(f"{prefix}actors.id")),
+        Column("settled_note", Text),
         Column("closed_at", DateTime(timezone=True)),  # expired / cancelled / refunded
         Column("created_at", DateTime(timezone=True), server_default=func.now(), nullable=False),
         Column(
@@ -106,6 +119,7 @@ def define_table(metadata: MetaData, *, prefix: str = "meydan_", name: str = "pa
         CheckConstraint(f"state IN ({states})", name="state"),
         CheckConstraint("length(subject) BETWEEN 1 AND 200", name="subject"),
         CheckConstraint("currency ~ '^[A-Z]{3}$'", name="currency"),
+        CheckConstraint("settled_note IS NULL OR length(settled_note) <= 500", name="settled_note"),
     )
     # one live due per subject and payer
     Index(
@@ -133,6 +147,14 @@ class Due:
     paid_at: datetime | None
     closed_at: datetime | None
     created_at: datetime
+    payer_id: uuid.UUID | None = None
+    settled_by: uuid.UUID | None = None
+    settled_note: str | None = None
+
+    @property
+    def payer(self) -> uuid.UUID:
+        """Who pays it: someone else when set, else whose it is."""
+        return self.payer_id or self.actor_id
 
     @property
     def kind(self) -> str:
@@ -154,6 +176,7 @@ class Due:
             amount=row.amount, currency=row.currency, deadline=row.deadline,
             readable_until=row.readable_until, expectation_id=row.expectation_id,
             paid_at=row.paid_at, closed_at=row.closed_at, created_at=row.created_at,
+            payer_id=row.payer_id, settled_by=row.settled_by, settled_note=row.settled_note,
         )  # fmt: skip
 
 
@@ -191,6 +214,9 @@ class Subject(Protocol):
     def on_released(self, conn: Connection, due: Due, why: DueState) -> None:
         """expired / cancelled / refund_pending / refunded: free what was held, if anything."""
         ...
+
+    # Optional: `on_settled(conn, due)`, paid outside a checkout (`Dues.settle`): fulfil as for a
+    # payment. Without it, settling a due of that kind is refused (DueError).
 
 
 class DueError(Exception):
@@ -263,7 +289,7 @@ class Dues:
         now = self.now()
         if due.state == DueState.OPEN:
             return due if now < due.deadline else None
-        if due.state == DueState.PAID:
+        if due.state in (DueState.PAID, DueState.SETTLED):
             return due if due.readable_until is None or now < due.readable_until else None
         return None
 
@@ -398,8 +424,10 @@ class Dues:
             subject = self.subject(due.kind)
             now = self.now()
             if c.status == Status.PAID:
-                moved = self._move(conn, due, DueState.PAID,
-                                   (DueState.OPEN, DueState.EXPIRED), paid_at=now)  # fmt: skip
+                # paid late is paid; paid although settled too (someone paid anyway): the payment
+                # counts, the app hears it (and may refund one of them)
+                frm = (DueState.OPEN, DueState.EXPIRED, DueState.SETTLED)
+                moved = self._move(conn, due, DueState.PAID, frm, paid_at=now)
                 if moved is not None:
                     subject.on_paid(conn, moved, c)
             elif c.status in (Status.REFUND_PENDING, Status.REFUNDED):
@@ -417,6 +445,31 @@ class Dues:
                     subject.on_released(conn, moved, DueState.CANCELLED)
 
         return handle
+
+    def settle(self, conn: Connection, due_id: uuid.UUID, *, by: uuid.UUID | None,
+               note: str, who: uuid.UUID | None = None) -> Due | None:  # fmt: skip
+        """Paid outside our checkouts: an organization covers it, cash, a bank transfer. `by` is
+        who settled it (an actor: a person or an organization; None: not one we know), `note`
+        why, `who` the person who recorded it (audit). From open or expired, once; None if it
+        was in another state. The app's `on_settled` fulfils it; its link stops taking payments
+        (it opens as paid until `readable_until`)."""
+        due = self.get(conn, due_id, lock=True)
+        if due is None:
+            return None
+        handler = getattr(self.subject(due.kind), "on_settled", None)
+        if handler is None:
+            raise DueError(f"subject kind {due.kind!r} has no on_settled")
+        moved = self._move(conn, due, DueState.SETTLED, (DueState.OPEN, DueState.EXPIRED),
+                           paid_at=self.now(), settled_by=by, settled_note=note[:500])  # fmt: skip
+        if moved is None:
+            return None
+        if who is not None:
+            action = f"due:settle:{moved.kind}"[:60]
+            conn.execute(
+                insert(self.tables.audit).values(actor_id=who, action=action, subject_id=moved.id)
+            )
+        handler(conn, moved)
+        return moved
 
     def cancel(self, conn: Connection, due_id: uuid.UUID) -> Due | None:
         """Close an open due (the app no longer wants it paid); its link stops working."""

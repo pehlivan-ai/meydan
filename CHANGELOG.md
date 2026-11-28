@@ -6,6 +6,18 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.55.0] - 2026-11-28
+### Added
+- `meydan.pay.dues`: who pays may be someone else (`payer_id`, `Due.payer`); notices go to the
+  payer by default (`Notice(to="payer"|"owner")`).
+- `Dues.settle(due_id, by=, note=, who=)`: paid outside our checkouts (an organization covers it,
+  cash, a transfer); state `settled` (`settled_by`, `settled_note`), fact `due.settled`, the app's
+  optional `on_settled(conn, due)`. A checkout paid anyway still counts (`settled` -> `paid`).
+### Upgrade
+- The dues table gains `payer_id`, `settled_by` (both FK actors, nullable), `settled_note`
+  (with a length check) and the state `settled` in its CHECK: apps add them in a migration
+  (columns first; the CHECK dropped and re-added `NOT VALID`, validated separately).
+
 ## [0.54.0] - 2026-11-28
 ### Added
 - `meydan.party`: a party made by someone who arranges it without taking part

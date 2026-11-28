@@ -29,6 +29,7 @@ import logging
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import UTC, datetime
+from typing import Literal
 
 from sqlalchemy import Connection, Engine, select
 
@@ -50,13 +51,15 @@ def _open_only(due: Due) -> bool:
 class Notice:
     """When the fact `on` happens to a due, send what `card` makes (nothing: None or empty).
     `name` keys it once per due. `skip(due)`: not when this says so, as it stands when the notice
-    is due. `at(due)`: not before this time (None: at once)."""
+    is due. `at(due)`: not before this time (None: at once). `to`: who gets it, the one who pays
+    (`payer`: the pay card, a reminder) or whose it is (`owner`)."""
 
     on: str
     name: str
     card: Card
     skip: Callable[[Due], bool] | None = None
     at: Callable[[Due], datetime | None] | None = None
+    to: Literal["payer", "owner"] = "payer"
 
 
 def opened(card: Card, name: str = "opened") -> Notice:
@@ -134,7 +137,8 @@ class Notices:
             return Later((at - now).total_seconds())
         if notice.skip is not None and notice.skip(due):
             return None
-        where = reach(conn, t, self.runtime.rules, due.actor_id)
+        to = due.payer if notice.to == "payer" else due.actor_id
+        where = reach(conn, t, self.runtime.rules, to)
         if where is None:
             log.warning("due %s: %s not sent (they never wrote to us)", due.id, notice.name)
             return None

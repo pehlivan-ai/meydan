@@ -9,7 +9,7 @@ from decimal import Decimal
 
 import pytest
 from conftest import URL, msg, receive, runtime, unavailable
-from sqlalchemy import MetaData, create_engine, func, select, text, update
+from sqlalchemy import MetaData, create_engine, func, insert, select, text, update
 
 from meydan.channels.base import Outbound
 from meydan.events import Events
@@ -188,3 +188,19 @@ async def test_notices_bound_after_the_runtime_was_built(w):
     n.bind(w.rt, w.dues)
     await ev.drain_once()
     assert len(w.sent()) == 1
+
+
+async def test_the_pay_card_goes_to_whoever_pays_it(w):
+    """Someone else pays (a friend, an organizer): the card goes to them, not to whose it is
+    (who here never wrote to us at all)."""
+    payer = w.writes(datetime.now(UTC))
+    with w.engine.begin() as c:
+        owner = c.execute(insert(w.t.actors).values(kind="person").returning(w.t.actors.c.id))
+        owner = owner.scalar()
+    ev = w.events(opened(w.card))
+    due = w.open(owner)
+    with w.engine.begin() as c:
+        c.execute(update(w.dues.table).where(w.dues.table.c.id == due.id).values(payer_id=payer))
+    assert await ev.drain_once() == 1
+    ((ref, message),) = w.sent()
+    assert ref == f"pay:{due.id}:opened" and w.windows == [True]
