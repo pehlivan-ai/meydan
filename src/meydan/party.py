@@ -66,7 +66,7 @@ from meydan.channels.base import Address, Outbound
 from meydan.events import emit
 from meydan.ids import uuid7
 from meydan.runtime import expect
-from meydan.runtime.identity import Routed
+from meydan.runtime.identity import Routed, find, owner, propose
 from meydan.runtime.tables import RuntimeTables
 
 log = logging.getLogger(__name__)
@@ -553,6 +553,7 @@ class Parties:
         if taken is None:
             raise SeatError("closed", seat)
         self._close_asks(conn, seat.id)  # answered: no other door stays open
+        self._propose_address(conn, taken, actor_id, door)
         self._emit(conn, "seat.accepted", party, taken, door)
         party = self._maybe_confirmed(conn, party)
         h = self.kind(party.kind).handler
@@ -608,6 +609,19 @@ class Parties:
         ).all()  # fmt: skip
         for exp_id in live:
             expect.cancel(conn, self.t, exp_id)
+
+    def _propose_address(self, conn: Connection, seat: Seat, actor_id: uuid.UUID, door: Door
+                         ) -> None:  # fmt: skip
+        """The inviter gave an address for this seat and someone took it: if nobody owns that
+        address yet, it may be theirs (a `proposed` claim, never a link: the inviter typed it).
+        The channel links it later (a reply or receipt naming both), or a person decides."""
+        if seat.address is None:
+            return
+        identity = find(conn, self.t, seat.address)
+        if identity is None or owner(conn, self.t, identity) is not None:
+            return
+        propose(conn, self.t, identity, actor_id, "invitation",
+                {"seat_id": str(seat.id), "door": door.value})  # fmt: skip
 
     def _open(self, conn: Connection, seat_id: uuid.UUID) -> Seat:
         seat = self.seat(conn, seat_id)

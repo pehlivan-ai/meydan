@@ -167,13 +167,16 @@ def settle(
     return actor
 
 
-def _propose_once(
+def propose(
     conn: Connection,
     t: RuntimeTables,
     identity: uuid.UUID,
     actor: uuid.UUID,
+    basis: str,
     evidence: dict[str, Any],
-) -> None:
+) -> bool:
+    """A `proposed` claim (this identity may be this actor's), once per pair; nothing links until
+    the channel proves it (co-occurrence) or someone decides. True when one was recorded."""
     c = t.claims
     exists = conn.scalar(
         select(c.c.id).where(
@@ -183,8 +186,20 @@ def _propose_once(
             c.c.valid_to.is_(None),
         )
     )
-    if not exists:
-        claim(conn, t, identity, actor, "channel_cooccurrence", state="proposed", evidence=evidence)
+    if exists:
+        return False
+    claim(conn, t, identity, actor, basis, state="proposed", evidence=evidence)
+    return True
+
+
+def _propose_once(
+    conn: Connection,
+    t: RuntimeTables,
+    identity: uuid.UUID,
+    actor: uuid.UUID,
+    evidence: dict[str, Any],
+) -> None:
+    propose(conn, t, identity, actor, "channel_cooccurrence", evidence)
 
 
 def corroborate(

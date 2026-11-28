@@ -178,14 +178,24 @@ def cancel(conn: Connection, t: RuntimeTables, expectation_id: uuid.UUID) -> boo
 def _close(
     conn: Connection, t: RuntimeTables, expectation_id: uuid.UUID, state: str, **values: Any
 ) -> Expectation | None:
-    e = t.expectations
+    e, o = t.expectations, t.outbox
     row = conn.execute(
         update(e)
         .where(e.c.id == expectation_id, e.c.state == "pending")
         .values(state=state, closed_at=_now(), updated_at=_now(), **values)
         .returning(e)
     ).first()
-    return Expectation.of(row) if row else None
+    if row is None:
+        return None
+    # Its asking message, if it hasn't gone yet (waiting to send, or held for a template in
+    # review), is no longer worth sending: nobody can answer it any more.
+    conn.execute(
+        update(o)
+        .where(o.c.ref == f"{PREFIX}:{expectation_id}", o.c.status.in_(("pending", "held")))
+        .values(status="cancelled", last_error=f"its expectation closed ({state})",
+                updated_at=_now())
+    )  # fmt: skip
+    return Expectation.of(row)
 
 
 class NotCompletedError(Exception):

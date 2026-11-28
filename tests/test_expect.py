@@ -130,6 +130,24 @@ async def test_expired_cancelled_and_borrowed_tokens(db):
     assert press(rt, "in4", "expect:nope:accept", None) == "This is no longer valid."
 
 
+def test_a_closed_expectation_cancels_its_message_not_sent_yet(db):
+    """An ask that can't be answered any more is not sent: cancelled before the sender takes it."""
+    rt, _, _ = setup(db)
+    with rt.engine.begin() as c:
+        exp = ask(
+            c, rt, kind="invite", channel="whatsapp", endpoint=ENDPOINT,
+            address=Address("tel", PHONE), name="Ada", options=("accept", "decline"),
+            ttl=timedelta(days=7), message=lambda b: Outbound.template_message(
+                "invite", "tr", buttons=(b["accept"], b["decline"])
+            ),
+        )  # fmt: skip
+        assert cancel(c, rt.t, exp.id)
+    o = rt.t.outbox
+    with rt.engine.connect() as c:
+        row = c.execute(select(o).where(o.c.ref == f"expect:{exp.id}")).one()
+    assert row.status == "cancelled" and "cancelled" in row.last_error
+
+
 async def test_on_pending_refuse_resend_allow(db):
     rt, _, _ = setup(db)
     first, row = await asked(rt, key="admin:+905550000001")

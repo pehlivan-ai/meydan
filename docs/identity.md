@@ -41,6 +41,7 @@ actor ──< claim >── identity ──< participant >── conversation
 | `channel_cooccurrence` | the channel asserts two addresses in one signed message (WhatsApp: phone + BSUID) | unowned addresses join the owner automatically |
 | `channel_cooccurrence` (receipt) | a delivery receipt names the recipient by two addresses (WhatsApp: `recipient_id` + `recipient_user_id`) | same as above, but a receipt creates nobody: with no owner among them, nothing happens (`corroborate`) |
 | (conflict) | co-occurring addresses already belong to two actors | a `proposed` claim, once; **never merged automatically** |
+| `invitation` | someone takes a seat (meydan.party) the inviter gave an address for, and nobody owns that address yet | a `proposed` claim for the one who took it (`identity.propose`); the inviter typed it, so it never links on its own |
 | `proof_of_control`, `person_confirmed`, `self_asserted`, `org_attested`, `heuristic` | planned (challenges, confirmations) | link only on proof; self-asserted phones/emails are never linked on their own; names never link |
 
 Settlement takes an advisory lock per address, so concurrent webhooks for a new person can't

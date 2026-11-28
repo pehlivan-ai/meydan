@@ -6,6 +6,18 @@ tables or APIs; the entry says how to upgrade).
 
 ## [Unreleased]
 
+## [0.53.1] - 2026-11-28
+### Fixed
+- `expect`: an expectation that closes (answered, cancelled, expired, undeliverable) cancels its
+  asking message if it hasn't gone yet (`pending`, or `held` for a template in review): nobody
+  can answer it any more. In `meydan.party` this means one door closing the others also stops
+  their messages, not only their tokens.
+### Added
+- `identity.propose(conn, t, identity, actor, basis, evidence)`: a `proposed` claim, once per pair.
+- `meydan.party`: a seat taken by someone other than the owner of the address it was given for,
+  while nobody owns that address, records a `proposed` claim (basis `invitation`); it never links
+  on its own (docs/identity.md).
+
 ## [0.53.0] - 2026-11-28
 ### Added
 - `meydan.party` (experimental, docs/party.md): people in something together, each in a seat. A

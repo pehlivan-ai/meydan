@@ -257,3 +257,28 @@ async def test_ask_in_a_conversation_and_one_door_closes_the_others(world):
         assert parties.seat(c, seat.id).state == pt.SeatState.ACCEPTED
         states = dict(c.execute(select(e.c.id, e.c.state).where(e.c.kind == pt.KIND)).all())
     assert states == {by_address.id: "cancelled", inside.id: "answered"}
+
+
+def test_a_seat_taken_by_another_door_cancels_the_unsent_ask_and_proposes_the_address(world):
+    """Asked at a number nobody owns yet, taken by code from another account: the ask still
+    waiting is not sent, and the number may be theirs (proposed), never linked on that alone."""
+    rt, parties, _ = world
+    host, guest = actor(rt), actor(rt)
+    _, seat = made(rt, parties, host)
+    with rt.engine.begin() as c:
+        asked = parties.ask(
+            c, rt, seat.id, channel="whatsapp", endpoint=ENDPOINT,
+            message=lambda b: Outbound.template_message(
+                "duo_invite", "en", buttons=(b["accept"], b["decline"])
+            ),
+        )  # fmt: skip
+        parties.redeem(c, seat.code, guest)
+    o, cl, i = rt.t.outbox, rt.t.claims, rt.t.identities
+    with rt.engine.connect() as c:
+        assert c.scalar(select(o.c.status).where(o.c.ref == f"expect:{asked.id}")) == "cancelled"
+        claims = c.execute(
+            select(cl.c.actor_id, cl.c.state, cl.c.basis)
+            .join(i, i.c.id == cl.c.identity_id)
+            .where(i.c.value == GUEST_PHONE)
+        ).all()
+    assert [tuple(r) for r in claims] == [(guest, "proposed", "invitation")]
